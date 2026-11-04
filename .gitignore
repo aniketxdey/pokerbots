@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+results/
+bots_removed/
+*.upload
+.DS_Store

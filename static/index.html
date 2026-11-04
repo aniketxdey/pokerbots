@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>No Limit · Mock Pokerbot Tournament</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♠</text></svg>">
+<style>
+  :root {
+    --bg: #f5f3ee; --panel: #ffffff; --ink: #1b1d1f; --muted: #6b6f74; --line: #e4e0d8;
+    --felt: #0f5132; --felt-2: #157347; --accent: #b4232a; --warn: #a15c00; --chip: #f0ece3;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { background: var(--felt); color: #fff; padding: 14px 24px; display: flex; align-items: baseline; gap: 16px; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
+  header .sub { opacity: .8; font-size: 13px; }
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 16px; padding: 16px 24px; align-items: start; }
+  main > div { min-width: 0; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input[type=number], input[type=text], select, textarea {
+    width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: #fff; }
+  textarea { font-family: var(--mono); font-size: 12px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--chip); padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  button:hover { filter: brightness(.97); }
+  button.primary { background: var(--felt-2); border-color: var(--felt-2); color: #fff; font-weight: 600; }
+  button.danger { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 600; cursor: pointer; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-size: 12.5px; }
+  tr:hover td { background: #faf8f4; }
+  .bots-list { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+  .bots-list td { font-size: 12.5px; }
+  .tag { display: inline-block; font-size: 10.5px; padding: 1px 6px; border-radius: 10px; background: var(--chip); color: var(--muted); }
+  .bad { color: var(--accent); }
+  .warn { color: var(--warn); }
+  a { color: var(--felt-2); }
+  .progress { height: 10px; background: var(--chip); border-radius: 6px; overflow: hidden; margin: 8px 0; }
+  .progress > div { height: 100%; background: var(--felt-2); width: 0; transition: width .3s; }
+  .status-line { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .rank1 td { background: #fff7e0; }
+  pre.log { background: #11161a; color: #d8e1e8; padding: 12px; border-radius: 8px; max-height: 520px; overflow: auto; font-size: 12px; line-height: 1.4; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tabs button.active { background: var(--felt); color: #fff; border-color: var(--felt); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .muted { color: var(--muted); }
+  .flex { display: flex; gap: 8px; align-items: center; }
+  .grow { flex: 1; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>♠ No Limit — Mock Pokerbot Tournament</h1>
+  <span class="sub">8-bot sit-and-gos · 6 weighted rounds · 1 ms decisions</span>
+</header>
+<main>
+  <div>
+    <div class="card">
+      <h2>Settings <button id="officialBtn" title="Reset to the official published rules">Official rules</button></h2>
+      <div class="row">
+        <div><label>Rounds (scored tournaments)</label><input type="number" id="rounds" min="1"></div>
+        <div><label>Round weights</label><input type="text" id="round_weights"></div>
+      </div>
+      <div class="row">
+        <div><label>Iterations per round</label><input type="number" id="iterations" min="1">
+          <div class="hint">Official: 10,000. Each iteration seats every bot once.</div></div>
+        <div><label>Seats per table</label><input type="number" id="table_size" min="2" max="10"></div>
+      </div>
+      <div class="row3">
+        <div><label>Starting stack</label><input type="number" id="starting_stack"></div>
+        <div><label>Blinds up every</label><input type="number" id="blind_interval"></div>
+        <div><label>Hand cap</label><input type="number" id="max_hands"></div>
+      </div>
+      <label>Blind schedule (one level per line: SB/BB or SB/BB/ante)</label>
+      <textarea id="blind_schedule" rows="4"></textarea>
+      <div class="hint">Rules say "start at 10/20, increase every 25 hands" — the increments are a guess. Edit them on the day.</div>
+      <label>Points by finishing place (1st … 8th)</label>
+      <div class="flex"><select id="pointPreset" class="grow"></select></div>
+      <input type="text" id="points" style="margin-top:6px">
+      <div class="hint">Announced at the start of the build phase. At the hand cap, survivors split the remaining points by ICM.</div>
+      <div class="row3">
+        <div><label>Decision limit (ms)</label><input type="number" id="time_limit_ms" step="0.1"></div>
+        <div><label>Callback limit (ms)</label><input type="number" id="callback_time_limit_ms" step="0.1"></div>
+        <div><label>Enforcement</label>
+          <select id="time_mode"><option value="hard">hard (official)</option><option value="soft">soft</option><option value="off">off (measure)</option></select></div>
+      </div>
+      <div class="row3">
+        <div><label>Worker processes</label><input type="number" id="workers" min="0"><div class="hint" id="cpuHint"></div></div>
+        <div><label>Seed (0 = random)</label><input type="number" id="seed"></div>
+        <div><label>Live gap (min)</label><input type="number" id="round_interval_minutes" step="1">
+          <div class="hint">20 = real schedule</div></div>
+      </div>
+      <label class="flex" style="color:var(--ink);margin-top:10px"><input type="checkbox" id="practice"> Practice round (1 unscored round)</label>
+      <div class="btns">
+        <button class="primary" id="runBtn">Run tournament</button>
+        <button class="danger" id="stopBtn" disabled>Stop</button>
+      </div>
+      <div class="hint" id="runHint" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Bots <span class="muted" id="botCount"></span></h2>
+      <div class="flex" style="margin-bottom:8px">
+        <button id="allBtn">All</button><button id="noneBtn">None</button>
+        <span class="grow"></span>
+        <label style="margin:0"><button onclick="document.getElementById('upload').click()">Upload .py</button></label>
+        <input type="file" id="upload" accept=".py" multiple style="display:none">
+      </div>
+      <div class="bots-list"><table id="botsTable"><tbody></tbody></table></div>
+      <div class="hint">Each bot is one file in <code>bots/</code> defining <code>class Agent</code> with <code>act(obs)</code>. Up to 64. Files are re-read (frozen) at the start of every round.</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Status <select id="pastRuns" style="width:auto;font-size:12px"></select></h2>
+      <div class="status-line" id="statusLine">Idle.</div>
+      <div class="progress"><div id="bar"></div></div>
+      <div class="status-line" id="statusLine2"></div>
+      <pre class="log bad" id="errorBox" style="display:none;background:#fff0f0;color:#8a1c1c"></pre>
+    </div>
+
+    <div class="card">
+      <h2>Leaderboard <span class="muted" style="text-transform:none;letter-spacing:0">weighted score = Σ weightᵣ × avg points per tableᵣ</span></h2>
+      <table id="board"><thead></thead><tbody></tbody></table>
+    </div>
+
+    <div class="card">
+      <h2>Round details</h2>
+      <div class="tabs" id="roundTabs"></div>
+      <div style="overflow:auto"><table id="roundTable"><thead></thead><tbody></tbody></table></div>
+      <details id="logDetails"><summary>Sample table hand log</summary><pre class="log" id="logBox"></pre></details>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let DEFAULTS = null, PRESETS = {}, BOTS = [], selected = new Set(), polling = null;
+let viewRounds = [], viewRound = null, viewingPast = null, sortKey = 'rank', sortDir = 1, roundSort = ['avg_points', -1];
+const FIELDS = ['rounds','iterations','table_size','starting_stack','blind_interval','max_hands','time_limit_ms',
+                'callback_time_limit_ms','time_mode','workers','seed','round_interval_minutes'];
+
+function fmt(x, d=2) { return (x === null || x === undefined || isNaN(x)) ? '—' : Number(x).toFixed(d); }
+function pct(x) { return (x === null || x === undefined) ? '—' : (100*x).toFixed(1) + '%'; }
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function dur(s) { if (s == null) return '—'; s = Math.round(s); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60;
+  return (h ? h + 'h ' : '') + (h||m ? m + 'm ' : '') + x + 's'; }
+
+function setConfig(c) {
+  FIELDS.forEach(k => $(k).value = c[k]);
+  $('round_weights').value = c.round_weights.map(x => +x).join(', ');
+  $('blind_schedule').value = c.blind_schedule.map(l => l.join('/')).join('\n');
+  $('points').value = c.points.map(x => +x).join(', ');
+  $('practice').checked = !!c.practice;
+  syncPreset();
+}
+function getConfig() {
+  const c = {};
+  FIELDS.forEach(k => { const v = $(k).value; c[k] = (k === 'time_mode') ? v : Number(v); });
+  c.round_weights = $('round_weights').value.split(/[ ,]+/).filter(Boolean).map(Number);
+  c.blind_schedule = $('blind_schedule').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => l.split(/[\/ ,]+/).map(Number));
+  c.points = $('points').value.split(/[ ,]+/).filter(Boolean).map(Number);
+  c.practice = $('practice').checked;
+  return c;
+}
+function syncPreset() {
+  const cur = $('points').value.split(/[ ,]+/).filter(Boolean).map(Number).join(',');
+  let match = 'custom';
+  for (const [k, v] of Object.entries(PRESETS)) if (v.join(',') === cur) match = k;
+  $('pointPreset').value = match;
+}
+
+async function loadDefaults() {
+  const r = await fetch('/api/defaults'); const d = await r.json();
+  DEFAULTS = d.config; PRESETS = d.point_presets;
+  $('pointPreset').innerHTML = Object.keys(PRESETS).map(k => `<option value="${k}">${k.replaceAll('_',' ')}</option>`).join('') + '<option value="custom">custom</option>';
+  const saved = localStorageGet('nl_config');
+  setConfig(saved ? Object.assign({}, DEFAULTS, saved) : Object.assign({}, DEFAULTS, {iterations: 200}));
+  $('cpuHint').textContent = `0 = all ${d.cpu_count} cores`;
+}
+function localStorageGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
+function localStorageSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+async function loadBots() {
+  const r = await fetch('/api/bots'); BOTS = await r.json();
+  const sel = localStorageGet('nl_selected');
+  if (selected.size === 0) BOTS.forEach(b => { if (b.valid && (!sel || sel.includes(b.id))) selected.add(b.id); });
+  renderBots();
+}
+function renderBots() {
+  const tb = $('botsTable').querySelector('tbody');
+  tb.innerHTML = BOTS.map(b => `<tr>
+    <td><input type="checkbox" data-id="${b.id}" ${selected.has(b.id) ? 'checked' : ''} ${b.valid ? '' : 'disabled'}></td>
+    <td><b>${esc(b.name)}</b><br><span class="muted">${esc(b.file)}</span>
+      ${b.valid ? '' : `<br><span class="bad">${esc(b.problem)}</span>`}
+      ${b.description ? `<br><span class="muted" style="font-size:11.5px">${esc(b.description)}</span>` : ''}</td>
+    <td>${b.source ? `<a href="${esc(b.source)}" target="_blank" rel="noopener">source</a>` : '<span class="tag">yours</span>'}</td>
+  </tr>`).join('');
+  tb.querySelectorAll('input[type=checkbox]').forEach(cb => cb.onchange = () => {
+    cb.checked ? selected.add(cb.dataset.id) : selected.delete(cb.dataset.id); updateCount(); });
+  updateCount();
+}
+function updateCount() {
+  $('botCount').textContent = `${selected.size} selected / ${BOTS.length}`;
+  localStorageSet('nl_selected', [...selected]);
+  const n = selected.size, ts = Number($('table_size').value) || 8;
+  const tables = Math.ceil(n / ts), fill = tables * ts - n;
+  $('runHint').textContent = n ? `${n} bots → ${tables} table${tables>1?'s':''} per iteration` + (fill ? ` (${fill} filler seat${fill>1?'s':''}, no points)` : '') : '';
+}
+
+async function run() {
+  const cfg = getConfig(); localStorageSet('nl_config', cfg);
+  const r = await fetch('/api/run', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                     body: JSON.stringify({config: cfg, bots: [...selected]})});
+  const d = await r.json();
+  if (d.error) { alert(d.error); return; }
+  viewingPast = null; $('pastRuns').value = '';
+  startPolling();
+}
+function startPolling() { if (polling) clearInterval(polling); polling = setInterval(poll, 1000); poll(); }
+
+async function poll() {
+  const r = await fetch('/api/status'); const s = await r.json();
+  const running = ['running', 'starting', 'waiting'].includes(s.phase);
+  $('runBtn').disabled = running; $('stopBtn').disabled = !running;
+  if (viewingPast) return;
+  renderStatus(s);
+  if (s.leaderboard) renderBoard(s.leaderboard, s.config);
+  const rounds = (s.rounds || []).slice();
+  if (running && s.current_round && s.phase === 'running' && !rounds.find(x => x.round === s.round))
+    rounds.push({round: s.round, bots: s.current_round, partial: true});
+  viewRounds = rounds; renderRoundTabs();
+  if (!running && polling) { clearInterval(polling); polling = null; loadRuns(); }
+}
+function renderStatus(s) {
+  $('errorBox').style.display = s.error ? 'block' : 'none'; $('errorBox').textContent = s.error || '';
+  const cfg = s.config || {};
+  if (s.phase === 'idle' || !s.phase) { $('statusLine').textContent = 'Idle.'; $('bar').style.width = '0'; $('statusLine2').textContent=''; return; }
+  if (s.phase === 'waiting') {
+    $('statusLine').textContent = `Live mode: round ${s.next_round} starts in ${dur(s.wait_remaining)} — edit your bot files now; they are frozen when the round starts.`;
+    return;
+  }
+  const R = cfg.rounds || 1, frac = ((s.round - 1) + (s.total ? s.done / s.total : 0)) / R;
+  $('bar').style.width = (100 * (s.phase === 'done' ? 1 : frac)) + '%';
+  const phase = {running: 'Running', starting: 'Starting', done: 'Finished', stopped: 'Stopped', error: 'Error'}[s.phase] || s.phase;
+  $('statusLine').textContent = `${phase} · round ${s.round || '-'} of ${R} · iteration ${s.done ?? 0} / ${s.total ?? '-'}`;
+  $('statusLine2').textContent = (s.phase === 'running' ? `round elapsed ${dur(s.elapsed)} · round ETA ${dur(s.eta)}` : '') +
+    (s.result_file ? `saved results/${s.result_file}` : '');
+}
+
+const BOARD_COLS = [['rank','#'],['name','Bot'],['weighted','Weighted'],['weighted_avg','Avg pts']];
+function renderBoard(rows, cfg) {
+  const R = (cfg && cfg.rounds) || Math.max(1, ...rows.map(r => Object.keys(r.per_round||{}).length));
+  const cols = BOARD_COLS.concat([...Array(R).keys()].map(i => [`r${i+1}`, `T${i+1}${cfg && cfg.round_weights ? ' ×' + (+cfg.round_weights[i]) : ''}`]))
+    .concat([['win_rate','Win %'],['timeout_rate','Timeouts'],['errors','Errors']]);
+  const val = (r, k) => k.startsWith('r') && k !== 'rank' ? (r.per_round||{})[k.slice(1)] : r[k];
+  const data = rows.slice().sort((a, b) => { const x = val(a, sortKey), y = val(b, sortKey);
+    return (typeof x === 'string' ? x.localeCompare(y) : ((x ?? -1e9) - (y ?? -1e9))) * sortDir; });
+  $('board').querySelector('thead').innerHTML = '<tr>' + cols.map(([k, l]) =>
+    `<th class="${k==='name'?'':'num'}" data-k="${k}">${l}${sortKey===k ? (sortDir>0?' ▲':' ▼') : ''}</th>`).join('') + '</tr>';
+  $('board').querySelector('tbody').innerHTML = data.map(r => `<tr class="${r.rank===1?'rank1':''}">` + cols.map(([k]) => {
+    const v = val(r, k);
+    if (k === 'name') return `<td>${esc(v)}</td>`;
+    if (k === 'rank' || k === 'errors') return `<td class="num ${k==='errors'&&v?'bad':''}">${v ?? '—'}</td>`;
+    if (k === 'win_rate') return `<td class="num">${pct(v)}</td>`;
+    if (k === 'timeout_rate') return `<td class="num ${v>0.05?'warn':''}">${pct(v)}</td>`;
+    return `<td class="num">${fmt(v)}</td>`;
+  }).join('') + '</tr>').join('');
+  $('board').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.k; if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = (k==='rank'||k==='name') ? 1 : -1; }
+    renderBoard(rows, cfg); });
+}
+
+function renderRoundTabs() {
+  const tabs = $('roundTabs');
+  if (!viewRounds.length) { tabs.innerHTML = '<span class="muted">No rounds yet.</span>'; $('roundTable').querySelector('tbody').innerHTML=''; $('roundTable').querySelector('thead').innerHTML=''; return; }
+  if (viewRound === null || !viewRounds.find(r => r.round === viewRound)) viewRound = viewRounds[viewRounds.length - 1].round;
+  tabs.innerHTML = viewRounds.map(r => `<button class="${r.round===viewRound?'active':''}" data-r="${r.round}">T${r.round}${r.partial?' (live)':''}</button>`).join('');
+  tabs.querySelectorAll('button').forEach(b => b.onclick = () => { viewRound = +b.dataset.r; renderRoundTabs(); });
+  const rd = viewRounds.find(r => r.round === viewRound);
+  renderRoundTable(rd);
+}
+const RCOLS = [['name','Bot'],['avg_points','Avg pts'],['avg_place','Avg place'],['win_rate','Win %'],['top3_rate','Top 3'],
+  ['avg_hands_survived','Hands alive'],['tables','Tables'],['decisions','Decisions'],['timeouts','Timeouts'],['avg_decision_ms','Avg ms'],
+  ['max_decision_ms','Max ms'],['errors','Errors'],['invalid','Repaired']];
+function renderRoundTable(rd) {
+  if (!rd) return;
+  const [k0, d0] = roundSort;
+  const rows = rd.bots.slice().sort((a, b) => (typeof a[k0] === 'string' ? a[k0].localeCompare(b[k0]) : (a[k0] - b[k0])) * d0);
+  $('roundTable').querySelector('thead').innerHTML = '<tr>' + RCOLS.map(([k, l]) => `<th class="${k==='name'?'':'num'}" data-k="${k}">${l}</th>`).join('') + '</tr>';
+  $('roundTable').querySelector('tbody').innerHTML = rows.map(b => '<tr>' + RCOLS.map(([k]) => {
+    const v = b[k];
+    if (k === 'name') return `<td>${esc(v)}${b.error_samples && b.error_samples.length ? `<br><span class="bad" style="font-size:11px">${esc(b.error_samples[0])}</span>` : ''}</td>`;
+    if (k.endsWith('_rate')) return `<td class="num">${pct(v)}</td>`;
+    if (['tables','decisions','timeouts','errors','invalid'].includes(k)) return `<td class="num ${(k==='timeouts'||k==='errors')&&v?'warn':''}">${v}</td>`;
+    if (k.endsWith('_ms')) return `<td class="num">${fmt(v, 3)}</td>`;
+    return `<td class="num">${fmt(v)}</td>`;
+  }).join('') + '</tr>').join('');
+  $('roundTable').querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.k; roundSort = [k, roundSort[0] === k ? -roundSort[1] : (k === 'name' || k === 'avg_place' ? 1 : -1)]; renderRoundTable(rd); });
+  loadLog(rd);
+}
+async function loadLog(rd) {
+  if (rd.sample_log) { $('logBox').textContent = rd.sample_log.join('\n'); return; }
+  if (rd.partial) { $('logBox').textContent = 'Available when the round finishes.'; return; }
+  const r = await fetch(`/api/log/${rd.round}`);
+  $('logBox').textContent = r.ok ? (await r.json()).lines.join('\n') : 'No log.';
+}
+
+async function loadRuns() {
+  const r = await fetch('/api/runs'); const runs = await r.json();
+  $('pastRuns').innerHTML = '<option value="">Current run</option>' + runs.map(f => `<option value="${f}">${f}</option>`).join('');
+  if (viewingPast) $('pastRuns').value = viewingPast;
+}
+$('pastRuns').onchange = async () => {
+  const f = $('pastRuns').value;
+  if (!f) { viewingPast = null; startPolling(); return; }
+  viewingPast = f;
+  const r = await fetch(`/api/runs/${f}`); const d = await r.json();
+  $('statusLine').textContent = `Viewing saved run ${f} (seed ${d.seed}) · ${d.rounds.length} round(s) · ${d.bots.length} bots`;
+  $('statusLine2').textContent = ''; $('bar').style.width = '100%';
+  renderBoard(d.leaderboard, d.config); viewRounds = d.rounds; viewRound = null; renderRoundTabs();
+};
+
+$('runBtn').onclick = run;
+$('stopBtn').onclick = () => fetch('/api/stop', {method: 'POST'});
+$('officialBtn').onclick = () => setConfig(Object.assign({}, DEFAULTS));
+$('pointPreset').onchange = () => { const p = PRESETS[$('pointPreset').value]; if (p) $('points').value = p.join(', '); };
+$('points').oninput = syncPreset;
+$('table_size').oninput = updateCount;
+$('allBtn').onclick = () => { BOTS.forEach(b => b.valid && selected.add(b.id)); renderBots(); };
+$('noneBtn').onclick = () => { selected.clear(); renderBots(); };
+$('upload').onchange = async (e) => {
+  const fd = new FormData(); [...e.target.files].forEach(f => fd.append('files', f));
+  const r = await fetch('/api/bots', {method: 'POST', body: fd}); const d = await r.json();
+  d.saved.forEach(f => selected.add(f.replace(/\.py$/, '')));
+  if (d.errors.length) alert(d.errors.join('\n'));
+  e.target.value = ''; loadBots();
+};
+
+(async () => { await loadDefaults(); await loadBots(); await loadRuns(); startPolling(); })();
+</script>
+</body>
+</html>
