@@ -58,17 +58,60 @@
   .flex { display: flex; gap: 8px; align-items: center; }
   .grow { flex: 1; }
   code { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 1px 4px; border-radius: 4px; }
+  header nav { margin-left: auto; display: flex; gap: 4px; }
+  header nav button { background: transparent; color: #d7eadf; border: 1px solid transparent; }
+  header nav button.active { background: #fff; color: var(--felt); font-weight: 600; }
+  .variant-box { background: #f3f8f4; border: 1px solid #d5e7da; border-radius: 8px; padding: 8px 10px; margin-top: 6px; font-size: 12px; }
+  .variant-box .tags { margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .pill { display: inline-block; font-size: 10.5px; padding: 1px 7px; border-radius: 10px; background: #fff; border: 1px solid #d5e7da; color: var(--felt); }
+  /* ---------- the book (spreadsheet) ---------- */
+  #bookView { padding: 12px 24px 0; display: none; flex-direction: column; height: calc(100vh - 54px); }
+  .book-top { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .book-top h2 { margin: 0; font-size: 16px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
+  .chip b { color: var(--ink); font-family: var(--mono); }
+  .fx-bar { display: flex; align-items: stretch; border: 1px solid #c9c5bc; border-bottom: none; background: #fff; font-family: var(--mono); font-size: 12.5px; }
+  .fx-bar #cellRef { width: 80px; padding: 5px 8px; border-right: 1px solid #c9c5bc; color: var(--muted); text-align: center; }
+  .fx-bar .fx { padding: 5px 8px; color: var(--muted); font-style: italic; border-right: 1px solid #e4e0d8; }
+  .fx-bar #cellVal { padding: 5px 8px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sheet-wrap { flex: 1; overflow: auto; border: 1px solid #c9c5bc; background: #fff; }
+  table.sheet { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12.5px; }
+  table.sheet th, table.sheet td { border-right: 1px solid #e6e3dc; border-bottom: 1px solid #e6e3dc; padding: 3px 8px; white-space: nowrap;
+     max-width: 460px; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: 0; }
+  table.sheet thead th { position: sticky; background: #f1efe9; color: #4b4f54; z-index: 2; }
+  table.sheet thead tr.letters th { top: 0; height: 22px; font-weight: 500; text-align: center; color: #8a8e93; font-size: 11px; }
+  table.sheet thead tr.labels th { top: 22px; font-weight: 600; font-size: 12px; border-bottom: 2px solid #c9c5bc; }
+  table.sheet th.rn, table.sheet td.rn { position: sticky; left: 0; background: #f1efe9; color: #8a8e93; text-align: right; min-width: 38px; z-index: 1; font-size: 11px; }
+  table.sheet thead th.rn { z-index: 3; }
+  table.sheet td.c-num { text-align: right; font-family: var(--mono); }
+  table.sheet td.sel { outline: 2px solid #1a73e8; outline-offset: -2px; }
+  table.sheet td.col-sel, table.sheet th.col-sel { background-image: linear-gradient(rgba(26,115,232,.06), rgba(26,115,232,.06)); }
+  table.sheet tbody tr:hover td { filter: brightness(.98); }
+  .sheet-tabs { display: flex; gap: 2px; overflow-x: auto; background: #e9e6df; border: 1px solid #c9c5bc; border-top: none; padding: 0 4px; min-height: 32px; }
+  .sheet-tabs button { border-radius: 0 0 6px 6px; border: 1px solid transparent; border-top: none; background: transparent; padding: 5px 12px; white-space: nowrap; font-size: 12.5px; color: #4b4f54; }
+  .sheet-tabs button.active { background: #fff; border-color: #c9c5bc; color: var(--felt); font-weight: 600; }
+  .sheet-tabs .sep { width: 1px; background: #c9c5bc; margin: 6px 6px; }
+  .sheet-tabs button.vtab::before { content: "◆ "; color: #8fb79c; font-size: 9px; }
+  .book-empty { padding: 40px; text-align: center; color: var(--muted); }
 </style>
 </head>
 <body>
 <header>
   <h1>♠ No Limit — Mock Pokerbot Tournament</h1>
   <span class="sub">8-bot sit-and-gos · 6 weighted rounds · 1 ms decisions</span>
+  <nav><button id="navTourney" class="active">Tournament</button><button id="navBook">Book</button></nav>
 </header>
-<main>
+<main id="tourneyView">
   <div>
     <div class="card">
       <h2>Settings <button id="officialBtn" title="Reset to the official published rules">Official rules</button></h2>
+      <label>Poker variant <span class="muted" id="variantCount"></span></label>
+      <select id="variant"></select>
+      <div class="variant-box" id="variantBox"></div>
+      <label>Betting structure</label>
+      <select id="betting"><option value="">Variant default</option><option value="no_limit">No-limit</option>
+        <option value="pot_limit">Pot-limit</option><option value="fixed_limit">Fixed-limit</option></select>
       <div class="row">
         <div><label>Rounds (scored tournaments)</label><input type="number" id="rounds" min="1"></div>
         <div><label>Round weights</label><input type="text" id="round_weights"></div>
@@ -146,12 +189,29 @@
   </div>
 </main>
 
+<section id="bookView">
+  <div class="book-top">
+    <h2 id="bookTitle">Book</h2>
+    <div class="chips" id="bookChips"></div>
+    <span class="grow"></span>
+    <input type="text" id="bookFilter" placeholder="Filter rows…" style="width:220px">
+    <button id="bookCsv">Export CSV</button>
+    <button id="bookRefresh">Refresh</button>
+  </div>
+  <div class="muted" id="bookSub" style="font-size:12px;margin-bottom:6px"></div>
+  <div class="fx-bar"><span id="cellRef">A1</span><span class="fx">fx</span><span id="cellVal"></span></div>
+  <div class="sheet-wrap" id="sheetWrap"><table class="sheet" id="sheet"></table></div>
+  <div class="sheet-tabs" id="sheetTabs"></div>
+</section>
+
 <script>
 const $ = id => document.getElementById(id);
 let DEFAULTS = null, PRESETS = {}, BOTS = [], selected = new Set(), polling = null;
 let viewRounds = [], viewRound = null, viewingPast = null, sortKey = 'rank', sortDir = 1, roundSort = ['avg_points', -1];
-const FIELDS = ['rounds','iterations','table_size','starting_stack','blind_interval','max_hands','time_limit_ms',
+const FIELDS = ['variant','betting','rounds','iterations','table_size','starting_stack','blind_interval','max_hands','time_limit_ms',
                 'callback_time_limit_ms','time_mode','workers','seed','round_interval_minutes'];
+const STRING_FIELDS = ['variant','betting','time_mode'];
+let VARIANTS = [], VMAP = {};
 
 function fmt(x, d=2) { return (x === null || x === undefined || isNaN(x)) ? '—' : Number(x).toFixed(d); }
 function pct(x) { return (x === null || x === undefined) ? '—' : (100*x).toFixed(1) + '%'; }
@@ -160,7 +220,8 @@ function dur(s) { if (s == null) return '—'; s = Math.round(s); const h = Math
   return (h ? h + 'h ' : '') + (h||m ? m + 'm ' : '') + x + 's'; }
 
 function setConfig(c) {
-  FIELDS.forEach(k => $(k).value = c[k]);
+  FIELDS.forEach(k => { if (c[k] !== undefined) $(k).value = c[k]; });
+  renderVariantBox();
   $('round_weights').value = c.round_weights.map(x => +x).join(', ');
   $('blind_schedule').value = c.blind_schedule.map(l => l.join('/')).join('\n');
   $('points').value = c.points.map(x => +x).join(', ');
@@ -169,7 +230,7 @@ function setConfig(c) {
 }
 function getConfig() {
   const c = {};
-  FIELDS.forEach(k => { const v = $(k).value; c[k] = (k === 'time_mode') ? v : Number(v); });
+  FIELDS.forEach(k => { const v = $(k).value; c[k] = STRING_FIELDS.includes(k) ? v : Number(v); });
   c.round_weights = $('round_weights').value.split(/[ ,]+/).filter(Boolean).map(Number);
   c.blind_schedule = $('blind_schedule').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => l.split(/[\/ ,]+/).map(Number));
   c.points = $('points').value.split(/[ ,]+/).filter(Boolean).map(Number);
@@ -183,7 +244,35 @@ function syncPreset() {
   $('pointPreset').value = match;
 }
 
+async function loadVariants() {
+  const r = await fetch('/api/variants'); const d = await r.json();
+  VARIANTS = d.variants; VMAP = Object.fromEntries(VARIANTS.map(v => [v.id, v]));
+  const groups = {};
+  VARIANTS.forEach(v => (groups[v.category] = groups[v.category] || []).push(v));
+  $('variant').innerHTML = Object.entries(groups).map(([g, vs]) =>
+    `<optgroup label="${esc(g)}">` + vs.map(v => `<option value="${v.id}">${esc(v.name)}</option>`).join('') + '</optgroup>').join('');
+  $('variantCount').textContent = `(${VARIANTS.length} available)`;
+}
+const BET = {no_limit: 'No-limit', pot_limit: 'Pot-limit', fixed_limit: 'Fixed-limit'};
+const SPLIT = {high: 'High', hilo8: 'Hi-Lo 8 or better', low_a5: 'A-5 lowball', low_27: '2-7 lowball', badugi: 'Badugi'};
+const HAND = {any: 'best 5 of all', omaha: 'exactly 2 hole + 3 board', max2: 'at most 2 hole cards', both: 'must use both hole cards'};
+function renderVariantBox() {
+  const v = VMAP[$('variant').value]; if (!v) return;
+  const tags = [v.category, BET[v.betting] + ' default'];
+  if (v.game === 'community') tags.push(`${v.hole} hole cards`, HAND[v.hand]);
+  if (v.game === 'stud') tags.push('antes + bring-in');
+  if (v.game === 'draw') tags.push(`${v.hole} cards`, `${v.draws} draw${v.draws>1?'s':''}`);
+  if (v.game === 'mixed') tags.push('rotates: ' + v.rotation.map(id => VMAP[id] ? VMAP[id].name : id).join(' → '));
+  if (v.ranks.length < 13) tags.push(`${v.ranks.length * 4}-card deck`);
+  if (v.split !== 'high') tags.push(SPLIT[v.split]);
+  if (v.boards === 2) tags.push('two boards');
+  if (v.legacy) tags.push('MIT ' + v.legacy);
+  $('variantBox').innerHTML = `${esc(v.description)}<div class="tags">${tags.map(t => `<span class="pill">${esc(t)}</span>`).join('')}</div>` +
+    (v.id !== 'nlhe' ? `<div class="hint" style="margin-top:4px">Bots get <code>obs.variant</code>, <code>obs.hole_cards</code> (any count) and, where needed, <code>discard(obs)</code> / <code>bid(obs)</code> callbacks.</div>` : '');
+}
+
 async function loadDefaults() {
+  await loadVariants();
   const r = await fetch('/api/defaults'); const d = await r.json();
   DEFAULTS = d.config; PRESETS = d.point_presets;
   $('pointPreset').innerHTML = Object.keys(PRESETS).map(k => `<option value="${k}">${k.replaceAll('_',' ')}</option>`).join('') + '<option value="custom">custom</option>';
@@ -243,7 +332,7 @@ async function poll() {
   if (running && s.current_round && s.phase === 'running' && !rounds.find(x => x.round === s.round))
     rounds.push({round: s.round, bots: s.current_round, partial: true});
   viewRounds = rounds; renderRoundTabs();
-  if (!running && polling) { clearInterval(polling); polling = null; loadRuns(); }
+  if (!running && polling) { clearInterval(polling); polling = null; loadRuns(); BOOK = null; if (view === 'book') loadBook(); }
 }
 function renderStatus(s) {
   $('errorBox').style.display = s.error ? 'block' : 'none'; $('errorBox').textContent = s.error || '';
@@ -256,7 +345,8 @@ function renderStatus(s) {
   const R = cfg.rounds || 1, frac = ((s.round - 1) + (s.total ? s.done / s.total : 0)) / R;
   $('bar').style.width = (100 * (s.phase === 'done' ? 1 : frac)) + '%';
   const phase = {running: 'Running', starting: 'Starting', done: 'Finished', stopped: 'Stopped', error: 'Error'}[s.phase] || s.phase;
-  $('statusLine').textContent = `${phase} · round ${s.round || '-'} of ${R} · iteration ${s.done ?? 0} / ${s.total ?? '-'}`;
+  const vname = cfg.variant && VMAP[cfg.variant] ? VMAP[cfg.variant].name : 'No-Limit Hold\'em';
+  $('statusLine').textContent = `${phase} · ${vname} · round ${s.round || '-'} of ${R} · iteration ${s.done ?? 0} / ${s.total ?? '-'}`;
   $('statusLine2').textContent = (s.phase === 'running' ? `round elapsed ${dur(s.elapsed)} · round ETA ${dur(s.eta)}` : '') +
     (s.result_file ? `saved results/${s.result_file}` : '');
 }
@@ -330,10 +420,125 @@ $('pastRuns').onchange = async () => {
   if (!f) { viewingPast = null; startPolling(); return; }
   viewingPast = f;
   const r = await fetch(`/api/runs/${f}`); const d = await r.json();
-  $('statusLine').textContent = `Viewing saved run ${f} (seed ${d.seed}) · ${d.rounds.length} round(s) · ${d.bots.length} bots`;
+  $('statusLine').textContent = `Viewing saved run ${f} · ${d.variant_name || 'No-Limit Hold\'em'} · seed ${d.seed} · ${d.rounds.length} round(s) · ${d.bots.length} bots`;
   $('statusLine2').textContent = ''; $('bar').style.width = '100%';
   renderBoard(d.leaderboard, d.config); viewRounds = d.rounds; viewRound = null; renderRoundTabs();
 };
+
+$('variant').onchange = renderVariantBox;
+
+// ======================================================================= the Book (spreadsheet)
+let BOOK = null, view = 'tourney', sheetIdx = 0, bookSort = null, sel = [0, 0], visibleRows = [];
+function colLetter(i) { let s = ''; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
+function showView(v) {
+  view = v;
+  $('tourneyView').style.display = v === 'tourney' ? '' : 'none';
+  $('bookView').style.display = v === 'book' ? 'flex' : 'none';
+  $('navTourney').classList.toggle('active', v === 'tourney'); $('navBook').classList.toggle('active', v === 'book');
+  if (v === 'book' && !BOOK) loadBook();
+}
+async function loadBook() {
+  const r = await fetch('/api/book'); BOOK = await r.json();
+  if (sheetIdx >= BOOK.sheets.length) sheetIdx = 0;
+  const S = BOOK.summary;
+  $('bookChips').innerHTML = [['Runs', S.runs], ['Bots', S.bots], ['Variants played', `${S.variants_played} / ${S.variants_known}`],
+    ['Bot-runs', S.entries], ['Leader', S.leader || '—']].map(([k, v]) => `<span class="chip">${k} <b>${esc(v)}</b></span>`).join('');
+  renderSheetTabs(); renderSheet();
+}
+function renderSheetTabs() {
+  const tabs = BOOK.sheets.map((sh, i) => (sh.kind === 'variant' && (i === 0 || BOOK.sheets[i-1].kind !== 'variant') ? '<span class="sep"></span>' : '') +
+    `<button class="${i===sheetIdx?'active':''} ${sh.kind==='variant'?'vtab':''}" data-i="${i}" title="${esc(sh.title)}">${esc(sh.name)}</button>`).join('');
+  $('sheetTabs').innerHTML = tabs;
+  $('sheetTabs').querySelectorAll('button').forEach(b => b.onclick = () => { sheetIdx = +b.dataset.i; bookSort = null; sel = [0, 0]; renderSheetTabs(); renderSheet(); });
+}
+function fmtCell(v, c) {
+  if (v === null || v === undefined || v === '') return '';
+  switch (c.type) {
+    case 'pct': return (c.key === 'trend' && v > 0 ? '+' : '') + (100 * v).toFixed(1) + '%';
+    case 'int': return String(Math.round(v));
+    case 'num': return Number(v).toFixed(c.digits ?? 2);
+    case 'date': { const d = new Date(v * 1000); return d.toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'}) + ' ' + d.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'}); }
+    default: return String(v);
+  }
+}
+function heat(v, lo, hi, better) {
+  if (v === null || v === undefined || hi === lo || !better) return '';
+  let t = (v - lo) / (hi - lo); if (better === 'low') t = 1 - t;
+  const hue = Math.round(t * 120);
+  return `background:hsl(${hue},62%,${90 - 6 * Math.abs(t - .5)}%)`;
+}
+function renderSheet() {
+  const sh = BOOK.sheets[sheetIdx];
+  $('bookTitle').textContent = sh.name;
+  $('bookSub').textContent = sh.title;
+  if (!BOOK.summary.runs) {
+    $('sheet').innerHTML = `<tbody><tr><td class="book-empty">No runs yet. Every tournament you finish is added to the book automatically
+      (results/*.json). Run one from the Tournament tab.</td></tr></tbody>`; return;
+  }
+  const q = $('bookFilter').value.trim().toLowerCase();
+  let rows = sh.rows.filter(r => !q || sh.columns.some(c => String(r[c.key] ?? '').toLowerCase().includes(q)));
+  if (bookSort) {
+    const [k, d] = bookSort;
+    rows = rows.slice().sort((a, b) => { const x = a[k], y = b[k];
+      if (x === null || x === undefined) return 1; if (y === null || y === undefined) return -1;
+      return (typeof x === 'string' ? x.localeCompare(y) : x - y) * d; });
+  }
+  visibleRows = rows;
+  const ranges = {};
+  sh.columns.forEach(c => { if (c.better && c.type !== 'text') {
+    const vals = rows.map(r => r[c.key]).filter(v => typeof v === 'number');
+    ranges[c.key] = [Math.min(...vals), Math.max(...vals)]; } });
+  const head = '<thead><tr class="letters"><th class="rn"></th>' + sh.columns.map((c, i) => `<th data-c="${i}">${colLetter(i)}</th>`).join('') + '</tr>' +
+    '<tr class="labels"><th class="rn">#</th>' + sh.columns.map((c, i) => `<th data-k="${c.key}" data-c="${i}" style="${c.width ? 'min-width:' + c.width + 'px' : ''}" title="Sort by ${esc(c.label)}">${esc(c.label)}${bookSort && bookSort[0] === c.key ? (bookSort[1] > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr></thead>';
+  const body = '<tbody>' + rows.map((r, ri) => `<tr><td class="rn">${ri + 1}</td>` + sh.columns.map((c, ci) => {
+    const v = r[c.key]; const rg = ranges[c.key];
+    const style = rg && typeof v === 'number' ? heat(v, rg[0], rg[1], c.better) : '';
+    return `<td data-r="${ri}" data-c="${ci}" class="${c.type === 'text' || c.type === 'date' ? '' : 'c-num'}" style="${style}">${esc(fmtCell(v, c))}</td>`;
+  }).join('') + '</tr>').join('') + '</tbody>';
+  $('sheet').innerHTML = head + body;
+  $('sheet').querySelectorAll('tr.labels th[data-k]').forEach(th => th.onclick = () => {
+    const k = th.dataset.k; const c = sh.columns.find(c => c.key === k);
+    bookSort = bookSort && bookSort[0] === k ? [k, -bookSort[1]] : [k, (c.type === 'text' || c.better === 'low') ? 1 : -1];
+    renderSheet(); });
+  $('sheet').querySelectorAll('tbody td[data-r]').forEach(td => td.onclick = () => { sel = [+td.dataset.r, +td.dataset.c]; markSel(); });
+  markSel();
+}
+function markSel() {
+  const sh = BOOK.sheets[sheetIdx];
+  $('sheet').querySelectorAll('.sel, .col-sel').forEach(e => e.classList.remove('sel', 'col-sel'));
+  const [r, c] = sel; const td = $('sheet').querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+  const th = $('sheet').querySelector(`tr.letters th[data-c="${c}"]`);
+  if (th) th.classList.add('col-sel');
+  if (!td) { $('cellRef').textContent = ''; $('cellVal').textContent = ''; return; }
+  td.classList.add('sel'); td.scrollIntoView({block: 'nearest', inline: 'nearest'});
+  const col = sh.columns[c], row = visibleRows[r], raw = row ? row[col.key] : '';
+  $('cellRef').textContent = colLetter(c) + (r + 1);
+  $('cellVal').textContent = `${col.label}: ` + (raw === null || raw === undefined ? '' : (typeof raw === 'number' && col.type !== 'int' && col.type !== 'date' ? +raw.toFixed(6) : fmtCell(raw, col)));
+}
+document.addEventListener('keydown', e => {
+  if (view !== 'book' || !BOOK || document.activeElement === $('bookFilter')) return;
+  const sh = BOOK.sheets[sheetIdx]; let [r, c] = sel;
+  if (e.key === 'ArrowDown') r = Math.min(visibleRows.length - 1, r + 1);
+  else if (e.key === 'ArrowUp') r = Math.max(0, r - 1);
+  else if (e.key === 'ArrowRight' || e.key === 'Tab') c = Math.min(sh.columns.length - 1, c + 1);
+  else if (e.key === 'ArrowLeft') c = Math.max(0, c - 1);
+  else return;
+  e.preventDefault(); sel = [r, c]; markSel();
+});
+function exportCsv() {
+  const sh = BOOK.sheets[sheetIdx];
+  const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const lines = [sh.columns.map(c => q(c.label)).join(',')].concat(visibleRows.map(r => sh.columns.map(c =>
+    q(c.type === 'date' && r[c.key] ? new Date(r[c.key] * 1000).toISOString() : r[c.key])).join(',')));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/csv'}));
+  a.download = `book-${sh.name.replace(/[^a-z0-9]+/gi, '_')}.csv`; a.click();
+}
+$('navTourney').onclick = () => showView('tourney');
+$('navBook').onclick = () => showView('book');
+$('bookFilter').oninput = () => { sel = [0, 0]; renderSheet(); };
+$('bookRefresh').onclick = loadBook;
+$('bookCsv').onclick = exportCsv;
 
 $('runBtn').onclick = run;
 $('stopBtn').onclick = () => fetch('/api/stop', {method: 'POST'});

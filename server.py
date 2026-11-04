@@ -19,6 +19,8 @@ sys.path.insert(0, ROOT)
 from engine.loader import list_bot_files, inspect_bot, MAX_BOTS, MAX_FILE_BYTES  # noqa: E402
 from engine.scoring import POINT_PRESETS  # noqa: E402
 from engine.tournament import Config, run_tournament, save_results, combine, DEFAULT_BLINDS  # noqa: E402
+from engine.variants import variant_list, BETTING_NAMES  # noqa: E402
+from engine.book import build_book  # noqa: E402
 
 BOTS_DIR = os.path.join(ROOT, "bots")
 RESULTS_DIR = os.path.join(ROOT, "results")
@@ -46,6 +48,25 @@ def index():
 def defaults():
     return jsonify({"config": Config().to_dict(), "point_presets": POINT_PRESETS,
                     "blinds": DEFAULT_BLINDS, "max_bots": MAX_BOTS, "cpu_count": os.cpu_count()})
+
+
+@app.get("/api/variants")
+def variants():
+    return jsonify({"variants": variant_list(), "betting": BETTING_NAMES})
+
+
+_book_cache = {"key": None, "book": None}
+
+
+@app.get("/api/book")
+def book():
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    key = tuple(sorted((fn, os.path.getmtime(os.path.join(RESULTS_DIR, fn)))
+                       for fn in os.listdir(RESULTS_DIR) if fn.endswith(".json")))
+    if _book_cache["key"] != key:
+        _book_cache["book"] = build_book(RESULTS_DIR)
+        _book_cache["key"] = key
+    return jsonify(_book_cache["book"])
 
 
 @app.get("/api/bots")

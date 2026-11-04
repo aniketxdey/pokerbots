@@ -85,8 +85,8 @@ class RoundState:
         self.my_contribution = obs.my_contributed * scale
         self.opp_contribution = (obs.pot - obs.my_contributed) * scale
         self.pot = obs.pot * scale
-        self.bids = [0, 0]
-        self.bounties = ["", ""]
+        self.bids = [getattr(obs, "my_bid", None), None]
+        self.bounties = [obs.bounty_rank or "", ""]  # 2025 Bounty Hold'em: your bounty rank
         self.previous_state = None
 
     def legal_actions(self):
@@ -100,7 +100,14 @@ class RoundState:
             out.add(CheckAction)
         if "raise" in la:
             out.add(RaiseAction)
+        if "discard" in la:   # 2026 Toss Hold'em
+            out.add(DiscardAction)
+        if "bid" in la:       # 2024 Auction Hold'em
+            out.add(BidAction)
         return out
+
+    def bid_bounds(self):
+        return (0, self._obs.my_stack * self._s)
 
     def raise_bounds(self):
         o = self._obs
@@ -175,6 +182,22 @@ def mit_agent(player_cls):
             a = self.player.get_action(self._gs(obs), rs, 0)
             return _translate(a, self.scale)
 
+        def discard(self, obs):
+            """2026 Toss Hold'em: the MIT bot answers with DiscardAction(card_index)."""
+            self.last_obs = obs
+            a = self.player.get_action(self._gs(obs), RoundState(obs, self.scale), 0)
+            if isinstance(a, DiscardAction):
+                return [obs.down_cards[int(a.card)]]
+            return None
+
+        def bid(self, obs):
+            """2024 Auction Hold'em: the MIT bot answers with BidAction(amount)."""
+            self.last_obs = obs
+            a = self.player.get_action(self._gs(obs), RoundState(obs, self.scale), 0)
+            if isinstance(a, BidAction):
+                return int(round(float(a.amount) / self.scale))
+            return 0
+
         def hand_over(self, result):
             obs = self.last_obs
             if obs is None:
@@ -192,6 +215,11 @@ def mit_agent(player_cls):
             prev.board = list(result.board)
             d = result.deltas[me] * self.scale
             ts = TerminalState([d, -d], prev)
+            b = getattr(result, "bounty_rank", None)
+            if b:
+                mine = {c[0] for c in list(obs.hole_cards) + list(result.board)}
+                ts.bounty_hits = [b in mine, False]
+                prev.bounties = [b, ""]
             self.player.handle_round_over(self._gs(obs), ts, 0)
 
     Agent.__name__ = "Agent"

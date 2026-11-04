@@ -29,10 +29,6 @@ def _from_ppe(card):
     return str_to_card(card[1] + card[0].lower())
 
 
-class _Card(int):
-    pass
-
-
 def gen_cards(cards_str):
     return [_from_ppe(c) for c in cards_str]
 
@@ -91,12 +87,19 @@ class BasePokerPlayer:
 _STREETS = {0: "preflop", 3: "flop", 4: "turn", 5: "river"}
 
 
+def _street(obs):
+    name = getattr(obs, "street_name", None)
+    if name in ("preflop", "flop", "turn", "river"):
+        return name
+    return _STREETS.get(obs.street, "river" if obs.street >= 5 else "flop")
+
+
 def _round_state(obs):
     seats = [{"name": f"p{p.seat}", "uuid": f"p{p.seat}", "stack": p.stack,
               "state": "folded" if p.folded else ("participating" if not p.eliminated else "folded")}
              for p in obs.players]
     return {
-        "street": _STREETS[obs.street],
+        "street": _street(obs),
         "pot": {"main": {"amount": obs.pot}, "side": []},
         "community_card": [to_ppe(c) for c in obs.board],
         "dealer_btn": obs.button,

@@ -178,6 +178,137 @@ def test_full_table_conservation_and_places():
         assert abs(sum(res.points) - sum(cfg.points)) < 1e-6
 
 
+# ------------------------------------------------------------------ variants
+from engine.variants import (get_variant, high_value, low_value, low8_qualifies, low_27_5,  # noqa: E402
+                             badugi_value, showdown_scores, permutation, VARIANTS)
+
+
+def test_omaha_must_use_exactly_two():
+    plo = get_variant("plo")
+    board = C("As", "Ks", "Qs", "Js", "2c")
+    hole = C("Ts", "9d", "8h", "7c")
+    assert category(high_value(plo, hole, board)) == 4          # straight, not a straight flush
+    assert category(high_value(get_variant("nlhe"), hole[:2], board)) == 8
+
+
+def test_short_deck_rankings():
+    sd = get_variant("shortdeck")
+    flush = high_value(sd, C("As", "8s"), C("6s", "7s", "Ks", "6d", "7d"))
+    boat = high_value(sd, C("6h", "6c"), C("6s", "7s", "Ks", "7d", "Td"))
+    assert flush > boat
+    wheel = high_value(sd, C("Ac", "6d"), C("7h", "8s", "9c", "Kd", "Kh"))
+    six_high = high_value(sd, C("Tc", "6d"), C("7h", "8s", "9c", "Kd", "Qh"))
+    trips = high_value(sd, C("Kc", "Ks"), C("7h", "8s", "Kd", "Ad", "Qh"))
+    assert six_high > wheel > trips                                # A-6-7-8-9 straight, beats trips
+    sdt = get_variant("shortdeck_trips")
+    assert high_value(sdt, C("Kc", "Ks"), C("7h", "8s", "Kd", "Ad", "Qh")) > \
+        high_value(sdt, C("Ac", "6d"), C("7h", "8s", "9c", "Kd", "Kh"))
+
+
+def test_low_hands():
+    v = get_variant("holdem_hilo")
+    wheel = low_value(v, C("Ac", "2d"), C("3h", "4s", "5c", "Kd", "Kh"))
+    eight = low_value(v, C("8c", "2d"), C("3h", "4s", "6c", "Kd", "Kh"))
+    nine = low_value(v, C("9c", "2d"), C("3h", "4s", "6c", "Kd", "Kh"))
+    assert wheel < eight < nine and low8_qualifies(eight) and not low8_qualifies(nine)
+    # deuce-to-seven: 7-5-4-3-2 is the nuts, A-2-3-4-5 is just ace high
+    assert low_27_5(C("7c", "5d", "4h", "3s", "2c")) < low_27_5(C("8c", "5d", "4h", "3s", "2c"))
+    assert low_27_5(C("Ac", "5d", "4h", "3s", "2c")) > low_27_5(C("Kc", "5d", "4h", "3s", "2c"))
+    # badugi: any 4-card badugi beats any 3-card one
+    assert badugi_value(C("Kc", "Qd", "Jh", "Ts")) < badugi_value(C("Ac", "2d", "3h", "4h"))
+    assert badugi_value(C("Ac", "2d", "3h", "4s")) < badugi_value(C("Ac", "2d", "3h", "5s"))
+
+
+def test_hilo_split_pot():
+    top = C("Ac", "2d",   # seat 1: nut low + high card
+            "Kh", "Kd",   # seat 2: kings
+            "9s", "9d",   # seat 0
+            "3h", "4s", "5c", "Kc", "Qh")  # board: seat1 has wheel straight (high!) and A-5 low
+    agents = [Script(["fold"]), Script(["call"]), Script(["check"] * 4)]
+    t = make_table(agents, [1000, 1000, 1000], top, variant="holdem_hilo")
+    play_one(t)
+    # seat 2 has trip kings, seat 1 a wheel straight -> seat 1 wins high AND low: scoops 40
+    assert t.seats[1].stack == 1020 and t.seats[2].stack == 980
+
+
+def test_pot_limit_and_fixed_limit_sizes():
+    top = C("2s", "3d", "4s", "5d", "6s", "7d", "Kc", "Kh", "9s", "8c", "2h")
+    s0 = Script(["fold"])
+    t = make_table([s0, Script([]), Script([])], [1000, 1000, 1000], top, variant="plhe")
+    play_one(t)
+    assert s0.seen[0].max_raise_to == 70           # PL: 20 + (30 pot) + 20 to call
+    s0 = Script(["fold"])
+    t = make_table([s0, Script([]), Script([])], [1000, 1000, 1000], top, variant="flhe")
+    play_one(t)
+    assert s0.seen[0].min_raise_to == s0.seen[0].max_raise_to == 40
+
+
+def test_stud_bring_in_and_draw():
+    random.seed(3)
+    for vid in ("stud", "razz", "td_27", "badugi", "mit2026_toss", "mit2024_auction"):
+        cfg = Config(time_mode="off", variant=vid).validate()
+
+        class Caller:
+            def act(self, obs):
+                assert len(obs.hole_cards) >= 2
+                return "call"
+
+            def discard(self, obs):
+                return obs.down_cards[:obs.discard_count] if obs.game != "draw" else obs.down_cards[:1]
+
+            def bid(self, obs):
+                return obs.max_bid // 10
+
+        slots = [BotSlot(i, f"c{i}", Caller(), BotStats(), True) for i in range(8)]
+        log = []
+        t = Table(slots, cfg, random.Random(7), log=log)
+        res = t.play()
+        assert sum(res.final_stacks) == 16000
+        text = "\n".join(log)
+        if vid in ("stud", "razz"):
+            assert "brings in" in text
+        if vid in ("td_27", "badugi"):
+            assert "draws 1" in text
+        if vid == "mit2026_toss":
+            assert "face up to the board" in text
+        if vid == "mit2024_auction":
+            assert "auction bids" in text
+
+
+def test_permutation_and_registry():
+    p = permutation(random.Random(1))
+    assert sorted(p) == list(range(13))
+    assert len(VARIANTS) >= 40
+
+
+def test_book_aggregates_runs_and_versions():
+    import json
+    import tempfile
+    from engine.book import build_book
+    d = tempfile.mkdtemp()
+
+    def run(name, t, variant, order, versions):
+        lb = [{"id": b, "name": b.upper(), "rank": k + 1, "weighted": 10 - k, "weighted_avg": 10 - k,
+               "per_round": {}, "win_rate": 0.1, "timeout_rate": 0.0, "errors": 0, "tables": 5}
+              for k, b in enumerate(order)]
+        with open(os.path.join(d, name), "w") as f:
+            json.dump({"started": t, "finished": t + 5, "variant": variant, "config": {"iterations": 5},
+                       "leaderboard": lb, "rounds": [], "bot_versions": versions}, f)
+
+    run("a.json", 1, "nlhe", ["x", "y", "z"], {"x": ["h1"], "y": ["h2"], "z": ["h3"]})
+    run("b.json", 2, "plo", ["x", "z", "y"], {"x": ["h1"], "y": ["h2"], "z": ["h3"]})
+    run("c.json", 3, "nlhe", ["y", "x", "z"], {"x": ["h1"], "y": ["h9"], "z": ["h3"]})
+    book = build_book(d)
+    names = [sh["name"] for sh in book["sheets"]]
+    assert {"Total", "Runs", "Variants", "Matrix", "Versions", "Entries"} <= set(names)
+    assert "Pot-Limit Omaha (PLO)" in names and "No-Limit Texas Hold'em" in names
+    total = book["sheets"][0]["rows"]
+    assert total[0]["name"] == "X" and total[0]["titles"] == 2       # best Elo first
+    vers = [r for r in book["sheets"][names.index("Versions")]["rows"] if r["name"] == "Y"]
+    assert sorted((r["label"], r["status"]) for r in vers) == [("v1", "legacy"), ("v2", "current")]
+    assert len(book["sheets"][names.index("Variants")]["rows"]) == len(VARIANTS)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

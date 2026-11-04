@@ -1,5 +1,6 @@
 """Discover bot files and freeze snapshots of their source code."""
 import ast
+import hashlib
 import os
 import time
 
@@ -74,6 +75,7 @@ def snapshot(paths):
             continue
         with open(p, "r", encoding="utf-8") as f:
             info["code"] = f.read()
+        info["hash"] = hashlib.sha1(info["code"].encode("utf-8")).hexdigest()[:10]  # bot version
         info["frozen_at"] = time.time()
         snap.append(info)
     return snap[:MAX_BOTS]

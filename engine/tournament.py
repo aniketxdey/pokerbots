@@ -35,6 +35,8 @@ DEFAULT_BLINDS = [[10, 20], [15, 30], [25, 50], [40, 80], [60, 120], [100, 200],
 
 @dataclass
 class Config:
+    variant: str = "nlhe"            # see engine/variants.py
+    betting: str = ""                # "" = variant default | no_limit | pot_limit | fixed_limit
     rounds: int = 6
     round_weights: list = field(default_factory=lambda: [1, 2, 3, 4, 5, 6])
     iterations: int = 10000
@@ -64,6 +66,11 @@ class Config:
         return c
 
     def validate(self):
+        from .variants import VARIANTS
+        if self.variant not in VARIANTS:
+            self.variant = "nlhe"
+        if self.betting not in ("", "no_limit", "pot_limit", "fixed_limit"):
+            self.betting = ""
         self.rounds = max(1, int(self.rounds))
         self.iterations = max(1, int(self.iterations))
         self.table_size = max(2, min(10, int(self.table_size)))
@@ -317,6 +324,7 @@ def _round_summary(snap, total, stats, cfg):
             "max_decision_ms": 1000 * st.time_max,
             "error_samples": list(st.error_samples),
             "frozen_at": b.get("frozen_at"),
+            "hash": b.get("hash"),
         })
     return out
 
@@ -377,15 +385,31 @@ def run_tournament(cfg, bot_paths, progress=None, stop=None, on_round=None, wait
             on_round(res, combine(rounds, cfg))
         if res["stopped"]:
             break
+    from .variants import get_variant
+    v = get_variant(cfg.variant)
+    versions = {}
+    for r in rounds:
+        for b in r["bots"]:
+            versions.setdefault(b["id"], [])
+            if b.get("hash") and b["hash"] not in versions[b["id"]]:
+                versions[b["id"]].append(b["hash"])
     return {"config": cfg.to_dict(), "seed": seed, "started": started, "finished": time.time(),
+            "variant": v.id, "variant_name": v.name, "variant_category": v.category,
+            "betting": cfg.betting or v.betting,
             "rounds": rounds, "leaderboard": combine(rounds, cfg),
+            "bot_versions": versions, "schema": 2,
             "bots": [os.path.basename(p) for p in bot_paths]}
 
 
 def save_results(results, results_dir):
     os.makedirs(results_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(results.get("started", time.time())))
-    path = os.path.join(results_dir, f"run-{stamp}.json")
+    tag = results.get("variant", "nlhe")
+    path = os.path.join(results_dir, f"run-{stamp}-{tag}.json")
+    k = 2
+    while os.path.exists(path):
+        path = os.path.join(results_dir, f"run-{stamp}-{tag}-{k}.json")
+        k += 1
     with open(path, "w") as f:
         json.dump(results, f, indent=1)
     return path

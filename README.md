@@ -1,15 +1,18 @@
 # No Limit — mock pokerbot tournament engine
 
 A local mock of the Sequoia × OpenAI × Citadel Securities **"No Limit"** pokerbot tournament
-([rules](https://pokerbot.sequoiacap.com/rules.html)): a No-Limit Hold'em sit-and-go engine,
-a tournament runner that follows the published scoring rules, a web UI for setting things up
-and running tournaments, and **42 open-source bots** ported from MIT Pokerbots and other
-public projects to practice against.
+([rules](https://pokerbot.sequoiacap.com/rules.html)): a sit-and-go engine that plays
+**41 poker variants** (No-Limit Hold'em by default), a tournament runner that follows the
+published scoring rules, a web UI for setting things up and running tournaments, a
+spreadsheet-style **Book** that tracks every run across every variant, and **42 open-source
+bots** ported from MIT Pokerbots and other public projects to practice against.
 
 ```bash
 pip install -r requirements.txt
 python server.py                      # UI at http://127.0.0.1:5000
 python run_tournament.py --iterations 200          # or from the command line
+python run_tournament.py --variant plo --iterations 200
+python run_tournament.py --list-variants
 python tests/test_engine.py           # engine tests
 ```
 
@@ -41,8 +44,8 @@ Linux and macOS; on Windows the hard 1 ms cutoff degrades to "soft" (see below).
 - **The point distribution.** It's announced at the start of the build phase. The default is
   50/30/20 for 1st/2nd/3rd. Presets include linear, winner-take-all and a steeper curve, or you
   can type your own.
-- **The poker variant** is revealed on the day, and the Finals use a different one. This engine
-  plays standard No-Limit Hold'em.
+- **The poker variant** is revealed on the day, and the Finals use a different one. The engine
+  defaults to No-Limit Hold'em; pick any of the 41 variants below to practice for the unknown.
 - **What "iteration" means.** The engine reads it as "seat every bot once", which is consistent
   with the filler-seat rule. Each bot therefore plays one table per iteration.
 - **Callbacks other than `act`** (`new_table`, `new_hand`, `hand_over`) have their own time
@@ -71,9 +74,109 @@ clearly. With the 50/30/20 points the standard error of a bot's average is rough
 - **Status:** a live progress bar with ETA, plus a picker for past runs (saved to `results/*.json`).
 - **Leaderboard:** sortable, with weighted score, per-round averages, win rate, timeout rate and
   errors.
+- **Book:** a spreadsheet of every run (see below).
 - **Round details:** average points and place, win and top-3 rate, hands survived, decision
   times (average and max), timeouts, crashes (with the first error message) and repaired illegal
   actions. Each round also includes a full hand log of one sample table.
+
+## Variants
+
+Pick a variant in the UI (grouped by family, with its rules shown underneath) or with
+`--variant`. Betting can be overridden: no-limit, pot-limit or fixed-limit. All tournament
+rules stay the same: 2,000 chips, the blind schedule, the hand cap, ICM and points.
+
+How the rules are implemented:
+
+- **Pot-limit:** the maximum raise-to is the current bet + the pot + the amount to call.
+- **Fixed-limit:** the small bet is 1 big blind and the big bet is 2 big blinds, with a cap
+  of 4 bets per street.
+- **Stud:** the ante is 1/5 of the big blind and the bring-in is 1/4. The lowest up card
+  brings in (the highest in Razz), the best showing hand acts first on later streets, and a
+  shared community card is dealt if the deck runs out on 7th street.
+- **Draw games:** the discard pile is reshuffled into the deck when it runs out.
+- **Hi-lo:** the low needs 8-or-better A-5, and the odd chip goes to the high hand.
+- **Mixed games** switch game at each blind level.
+- **MIT legacy variants** follow each year's MIT engine, generalized from heads-up to 8
+  players (see the descriptions below).
+
+Bots receive `obs.variant`, `obs.game`, `obs.betting`, `obs.hand_rule`, `obs.split` and all
+their cards in `obs.hole_cards`. Variants with discards or draws call `discard(obs)`, and
+Auction Hold'em calls `bid(obs)`. A bot without `discard` throws its lowest cards in forced
+discards and stands pat in draw games. A bot without `bid` bids 0. The MIT ports answer
+these through their own `DiscardAction` / `BidAction` code, and the 2025 bounty bots read
+their real bounty rank. Bots written only for Hold'em will often error or fold in other
+games, and the UI shows that. Testing that is useful, because the real variant is a
+surprise.
+
+| Family | id | Variant | Default betting | Rules |
+|---|---|---|---|---|
+| Hold'em family | `nlhe` | No-Limit Texas Hold'em | No-limit | The default (and the likely regional game): 2 hole cards, 5 board cards, no-limit betting. |
+| Hold'em family | `plhe` | Pot-Limit Texas Hold'em | Pot-limit | Hold'em where the maximum raise is the size of the pot. |
+| Hold'em family | `flhe` | Fixed-Limit Texas Hold'em | Fixed-limit | Hold'em with fixed bet sizes (small bet = big blind preflop/flop, big bet = 2x on turn/river), 4-bet cap. |
+| Hold'em family | `shortdeck` | Short Deck (6+) Hold'em | No-limit | 36-card deck (2-5 removed). Flush beats full house; A-6-7-8-9 is the lowest straight; straights beat trips. |
+| Hold'em family | `shortdeck_trips` | Short Deck (trips beat straights) | No-limit | Short Deck with the alternative ranking used in some rooms: flush > full house AND trips > straight. |
+| Hold'em family | `royal` | Royal Hold'em | No-limit | 20-card deck (tens to aces only). Every flop is connected; the only straight is broadway. |
+| Hold'em family | `greek` | Greek Hold'em | No-limit | Hold'em where you must use both hole cards (plus exactly 3 from the board). |
+| Hold'em family | `pineapple` | Pineapple | No-limit | 3 hole cards; discard 1 after the preflop betting, before the flop. Then plays as Hold'em. |
+| Hold'em family | `crazy_pineapple` | Crazy Pineapple | No-limit | 3 hole cards; discard 1 after the flop betting round. |
+| Hold'em family | `lazy_pineapple` | Lazy Pineapple | No-limit | 3 hole cards, no discard until showdown: your hand uses at most 2 of them. |
+| Hold'em family | `three_card_holdem` | Super Hold'em (3 hole cards) | No-limit | 3 hole cards kept to the end; best 5 of all 8 cards. |
+| Hold'em family | `irish` | Irish Poker | No-limit | 4 hole cards, Omaha-style preflop and flop; discard 2 after the flop betting, then Hold'em rules. |
+| Hold'em family | `holdem_hilo` | Hold'em Hi-Lo (8 or better) | Fixed-limit | Fixed-limit Hold'em; pot split between best high and best qualifying (8-or-better) A-5 low. |
+| Hold'em family | `double_board` | Double Board Hold'em | No-limit | Two boards are dealt; each pot is split half to the best hand on each board. |
+| Omaha family | `plo` | Pot-Limit Omaha (PLO) | Pot-limit | 4 hole cards; must use exactly 2 of them with exactly 3 board cards. |
+| Omaha family | `nlo` | No-Limit Omaha | No-limit | Omaha with no-limit betting. |
+| Omaha family | `flo` | Fixed-Limit Omaha | Fixed-limit | Omaha high with fixed-limit betting. |
+| Omaha family | `plo8` | Pot-Limit Omaha Hi-Lo (PLO8) | Pot-limit | PLO with the pot split between high and 8-or-better low (2+3 rule for both). |
+| Omaha family | `o8` | Limit Omaha Hi-Lo (O8) | Fixed-limit | The 'O' in HORSE: fixed-limit Omaha 8-or-better. |
+| Omaha family | `plo5` | 5-Card PLO | Pot-limit | Pot-limit Omaha with 5 hole cards (still exactly 2 + 3). |
+| Omaha family | `plo6` | 6-Card PLO | Pot-limit | Pot-limit Omaha with 6 hole cards. |
+| Omaha family | `bigo` | Big O (5-card PLO Hi-Lo) | Pot-limit | 5-card pot-limit Omaha 8-or-better. |
+| Omaha family | `courchevel` | Courchevel | Pot-limit | 5-card PLO where the first flop card is dealt face up before the preflop betting. |
+| Stud | `stud` | Seven Card Stud | Fixed-limit | Antes + bring-in; 2 down 1 up, three more up, last down. Best 5 of 7. Fixed limit. |
+| Stud | `stud8` | Seven Card Stud Hi-Lo (8 or better) | Fixed-limit | Seven Card Stud with the pot split high / 8-or-better low. |
+| Stud | `razz` | Razz | Fixed-limit | Seven Card Stud for the lowest A-5 hand (straights and flushes don't count, aces low). |
+| Stud | `five_card_stud` | Five Card Stud | Fixed-limit | 1 down 1 up, then three more up cards. Best 5-card hand. |
+| Draw | `five_card_draw` | Five Card Draw | Fixed-limit | 5 private cards, one draw (replace 0-5 cards). Best high hand. |
+| Draw | `nl_27_single` | No-Limit 2-7 Single Draw | No-limit | Deuce-to-seven lowball, one draw: the worst high hand wins (aces high, straights and flushes count). |
+| Draw | `td_27` | 2-7 Triple Draw | Fixed-limit | Deuce-to-seven lowball with three draws and fixed-limit betting. |
+| Draw | `td_a5` | A-5 Triple Draw | Fixed-limit | Ace-to-five lowball (aces low, straights/flushes ignored) with three draws. |
+| Draw | `badugi` | Badugi | Fixed-limit | 4-card triple draw: best hand has 4 different suits and ranks, as low as possible. |
+| Mixed games | `horse` | HORSE | Fixed-limit | Rotates Limit Hold'em, Omaha Hi-Lo, Razz, Stud, Stud Hi-Lo - switching every blind level. |
+| Mixed games | `eight_game` | 8-Game Mix | No-limit | 2-7 Triple Draw, Limit Hold'em, O8, Razz, Stud, Stud8, NL Hold'em, PLO - one per blind level. |
+| Mixed games | `hold_omaha` | Hold'em / Omaha mix | No-limit | Alternates NL Hold'em and PLO every blind level. |
+| MIT Pokerbots legacy variants | `mit2020_permutation` | 2020 Permutation Hold'em | No-limit | Card values are secretly permuted for the whole table (MIT's geometric prior); showdowns use the permuted ranks, so bots must learn which ranks are strong. |
+| MIT Pokerbots legacy variants | `mit2022_swap` | 2022 Swap Hold'em | No-limit | Before the flop each hole card is swapped with a random deck card with prob. 10%, before the turn with prob. 5%. You see your new cards; opponents don't. |
+| MIT Pokerbots legacy variants | `mit2023_red_river` | 2023 Red River Hold'em | No-limit | If the river is red (hearts/diamonds) another board card and betting round follow, repeating while the last card is red. |
+| MIT Pokerbots legacy variants | `mit2024_auction` | 2024 Auction Hold'em | No-limit | Right after the flop everyone in the hand bids for an extra hole card (second-price: the winner pays the second-highest bid into the pot; tied top bids all get a card and pay their bid). |
+| MIT Pokerbots legacy variants | `mit2025_bounty` | 2025 Bounty Hold'em | No-limit | Each bot gets a secret bounty rank every 25 hands. Winning a showdown with that rank in your hand or on the board collects 1.5x from the losers plus a 5-big-blind bonus. |
+| MIT Pokerbots legacy variants | `mit2026_toss` | 2026 Toss Hold'em | No-limit | 3 hole cards. After preflop a 2-card flop is dealt, then everyone discards one card face up onto the board before the flop betting; turn and river follow. |
+
+## The Book
+
+The **Book** tab is a spreadsheet built from every saved run (`results/*.json`). Every
+finished tournament is added automatically. Sheets (tabs along the bottom):
+
+| Sheet | What it tracks |
+|---|---|
+| **Total** | The combined book: every bot across all variants and tournaments. Elo rating, runs, variants played, titles, podiums, title %, average and best finish, average percentile, normalized score with 95% CI, consistency (std dev), last-5 form and trend, table win %, timeout %, errors, best and worst variant, number of code versions |
+| **Runs** | Every tournament: date, variant, family, betting, field size, rounds and iterations, winner, winner's score, runner-up, margin, duration, points scheme, seed |
+| **Variants** | All 41 variants, including unplayed ones: runs, bots, top-rated bot (variant Elo), most titles, last winner, tables played, rules |
+| **Matrix** | Bot × variant heatmap of average percentile finish |
+| **Versions** | Every code version of every bot (a hash of the source, frozen each round), marked current or legacy, with each version's record. Shows whether your edits helped |
+| **Entries** | Raw data: one row per bot per run |
+| one per variant | The same analytics as Total, restricted to that variant |
+
+Because runs use different point schemes, field sizes and weights, comparisons across runs
+use the **percentile** finish (1 = won, 0 = last) and the **normalized score** (average
+points ÷ the field average, so 1.0 = average). The **Elo** rating is a pairwise multiplayer
+Elo applied to runs in date order (K = 32, starting at 1500), computed both overall and per
+variant.
+
+Spreadsheet controls: click a column header to sort, use the filter box to search rows,
+click a cell to see its exact value in the formula bar, move with the arrow keys, and use
+"Export CSV" for the current sheet. Numeric columns are heat-mapped from green (better) to
+red (worse).
 
 ## Writing a bot
 
@@ -90,6 +193,7 @@ class Agent:
         # obs.history [(seat, action, amount_to, street)], obs.hands_until_blinds_up, ...
         return ("raise", obs.min_raise_to)   # or 'fold' | 'check' | 'call' | 'all_in'
     # optional: new_table(info), new_hand(obs), hand_over(result)
+    # variants: discard(obs) -> [cards], bid(obs) -> int
 ```
 
 Raise amounts are "raise to" totals for the current street. Illegal actions are repaired: an
@@ -177,7 +281,8 @@ Sources: [MIT Pokerbots](https://github.com/mitpokerbots) (MIT license),
 ## Layout
 
 ```
-engine/      evaluator.py  table.py (NLHE sit-and-go)  tournament.py (rounds, scoring, multiprocessing)
+engine/      evaluator.py  variants.py (41 variants + evaluators)  table.py (sit-and-go for every family)
+             tournament.py (rounds, scoring, multiprocessing)  book.py (analytics)
              sandbox.py (time limits, no network)  scoring.py (points, ICM)  loader.py  api.py
 compat/      framework emulation layers for the ported bots
 bots/        one file per bot (drop yours here, up to 64)

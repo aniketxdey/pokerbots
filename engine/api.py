@@ -11,6 +11,11 @@ A bot is one Python file in bots/ that defines a class named ``Agent``:
         def new_table(self, info): ...      # dict: seat, num_players, starting_stack, blind_schedule, ...
         def new_hand(self, obs): ...        # same Observation as act(), before any decision
         def hand_over(self, result): ...    # HandResult: deltas, showdown cards, board, ...
+        # variant-specific (only called in variants that need them):
+        def discard(self, obs): ...         # -> list of cards to throw away (Pineapple, Irish,
+                                            #    draw games, 2026 Toss). obs.discard_count = how many
+                                            #    (draw games: up to that many; 'stand pat' = [])
+        def bid(self, obs): ...             # -> int chips (2024 Auction Hold'em), 0..obs.max_bid
 
 Return value of act() can be any of:
     'fold' | 'check' | 'call' | 'all_in'
@@ -57,9 +62,10 @@ class Action(tuple):
 class PlayerView:
     """Public information about one seat. Opponents are anonymized: you only see seat numbers."""
 
-    __slots__ = ("seat", "stack", "bet", "contributed", "folded", "all_in", "in_hand", "eliminated")
+    __slots__ = ("seat", "stack", "bet", "contributed", "folded", "all_in", "in_hand", "eliminated",
+                 "up_cards")
 
-    def __init__(self, seat, stack, bet, contributed, folded, all_in, in_hand, eliminated):
+    def __init__(self, seat, stack, bet, contributed, folded, all_in, in_hand, eliminated, up_cards=()):
         self.seat = seat                # seat index at this table (0..n-1)
         self.stack = stack              # chips behind (not counting chips already bet)
         self.bet = bet                  # chips bet on the current street
@@ -68,6 +74,7 @@ class PlayerView:
         self.all_in = all_in
         self.in_hand = in_hand          # dealt into this hand and not folded
         self.eliminated = eliminated    # busted out of the tournament table
+        self.up_cards = list(up_cards)  # face-up cards (stud games)
 
     def __repr__(self):
         return (f"PlayerView(seat={self.seat}, stack={self.stack}, bet={self.bet}, "
@@ -82,11 +89,14 @@ class Observation:
     """
 
     FIELDS = (
-        "seat", "hand_number", "street", "street_name", "hole_cards", "board", "pot",
-        "to_call", "my_bet", "my_stack", "my_contributed", "current_bet", "min_raise_to",
-        "max_raise_to", "legal_actions", "small_blind", "big_blind", "ante", "button",
-        "small_blind_seat", "big_blind_seat", "num_players", "num_active", "players",
-        "history", "starting_stack", "hands_until_blinds_up", "max_hands", "time_limit_ms",
+        "seat", "hand_number", "street", "street_name", "round_index", "hole_cards", "down_cards",
+        "up_cards", "board", "board2", "pot", "to_call", "my_bet", "my_stack", "my_contributed",
+        "current_bet", "min_raise_to", "max_raise_to", "legal_actions", "small_blind", "big_blind",
+        "ante", "bring_in", "button", "small_blind_seat", "big_blind_seat", "num_players",
+        "num_active", "players", "players_up_cards", "history", "starting_stack",
+        "hands_until_blinds_up", "max_hands", "time_limit_ms", "variant", "variant_name", "game",
+        "betting", "hand_rule", "split", "deck_ranks", "num_hole_cards", "phase", "discard_count",
+        "draws_remaining", "bounty_rank", "min_bid", "max_bid", "bet_size",
     )
 
     def __init__(self, **kw):
@@ -139,8 +149,8 @@ class Observation:
 class HandResult:
     """Passed to hand_over()."""
 
-    __slots__ = ("hand_number", "deltas", "stacks", "board", "showdown", "winners",
-                 "eliminated", "my_seat")
+    __slots__ = ("hand_number", "deltas", "stacks", "board", "board2", "showdown", "winners",
+                 "eliminated", "my_seat", "variant", "bounty_rank")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -151,6 +161,18 @@ class HandResult:
 
     def get(self, k, default=None):
         return getattr(self, k, default)
+
+# Variant fields on every Observation:
+#   variant, variant_name    e.g. 'plo', 'Pot-Limit Omaha (PLO)'
+#   game                     'community' | 'stud' | 'draw' (mixed games report the current game)
+#   betting                  'no_limit' | 'pot_limit' | 'fixed_limit';  bet_size (fixed limit)
+#   hand_rule                'any' | 'omaha' (exactly 2 hole + 3 board) | 'max2' | 'both'
+#   split                    'high' | 'hilo8' | 'low_a5' | 'low_27' | 'badugi'
+#   deck_ranks               ranks in the deck, e.g. '6789TJQKA' for Short Deck
+#   hole_cards               ALL your private cards (stud: down + up); down_cards / up_cards
+#   players[i].up_cards      opponents' face-up stud cards;  board2: second board (double board)
+#   phase                    'bet' | 'discard' | 'bid';  draws_remaining;  bounty_rank (2025)
+#   round_index              betting round number within the hand
 
 # HandResult fields:
 #   deltas     list[int] chip change per seat this hand

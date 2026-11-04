@@ -3,6 +3,7 @@
     python run_tournament.py                       # official settings, all bots in bots/
     python run_tournament.py --iterations 200      # quicker
     python run_tournament.py --practice            # one unscored round
+    python run_tournament.py --variant plo         # any variant (see --list-variants)
     python run_tournament.py --bots mit2023_precompute fullhouse_shark ppe_fish_player
     python run_tournament.py --live 20             # real schedule: rounds 20 minutes apart,
                                                    # bots re-frozen at the start of each round
@@ -22,6 +23,10 @@ from engine.tournament import Config, run_tournament, save_results  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--variant", default="nlhe", help="variant id (see --list-variants)")
+    ap.add_argument("--betting", default="", choices=["", "no_limit", "pot_limit", "fixed_limit"],
+                    help="override the variant's default betting structure")
+    ap.add_argument("--list-variants", action="store_true")
     ap.add_argument("--iterations", type=int, default=10000)
     ap.add_argument("--rounds", type=int, default=6)
     ap.add_argument("--workers", type=int, default=0, help="0 = all cores")
@@ -35,16 +40,21 @@ def main():
     ap.add_argument("--bots", nargs="*", help="bot ids (file names without .py); default all")
     ap.add_argument("--bots-dir", default=os.path.join(ROOT, "bots"))
     a = ap.parse_args()
+    if a.list_variants:
+        from engine.variants import V
+        for v in V:
+            print(f"{v.id:22s} {v.name:40s} [{v.category}] {v.betting}")
+        return
 
     points = POINT_PRESETS.get(a.points) or [float(x) for x in a.points.split(",")]
-    cfg = Config(rounds=a.rounds, iterations=a.iterations, workers=a.workers, seed=a.seed,
+    cfg = Config(variant=a.variant, betting=a.betting, rounds=a.rounds, iterations=a.iterations, workers=a.workers, seed=a.seed,
                  time_limit_ms=a.time_limit_ms, time_mode=a.time_mode, points=points,
                  round_interval_minutes=a.live, practice=a.practice).validate()
     paths = list_bot_files(a.bots_dir)
     if a.bots:
         want = set(a.bots)
         paths = [p for p in paths if os.path.splitext(os.path.basename(p))[0] in want]
-    print(f"{len(paths)} bots, {cfg.rounds} round(s) x {cfg.iterations} iterations")
+    print(f"{len(paths)} bots, {cfg.variant}, {cfg.rounds} round(s) x {cfg.iterations} iterations")
 
     last = [0.0]
 

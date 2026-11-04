@@ -124,7 +124,8 @@ def fullhouse_state(obs):
     return {
         "type": "action_request",
         "hand_id": obs.hand_number,
-        "street": _FH_STREETS[obs.street],
+        "street": (obs.street_name if obs.street_name in ("preflop", "flop", "turn", "river")
+                   else _FH_STREETS.get(obs.street, "river")),
         "seat_to_act": obs.seat,
         "pot": obs.pot,
         "community_cards": list(obs.board),
