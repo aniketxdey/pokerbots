@@ -4,3 +4,4 @@ results/
 bots_removed/
 *.upload
 .DS_Store
+sim_runs/

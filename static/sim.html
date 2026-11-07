@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>No Limit practice event</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♠</text></svg>">
+<style>
+  :root { --bg:#f5f3ee; --panel:#fff; --ink:#1b1d1f; --muted:#6b6f74; --line:#e4e0d8; --felt:#0f5132; --felt-2:#157347;
+          --accent:#b4232a; --warn:#a15c00; --chip:#f0ece3; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--felt); color:#fff; padding:12px 24px; display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:18px; margin:0; }
+  header a { color:#cfe8da; font-size:13px; }
+  header .spend { margin-left:auto; text-align:right; font-size:12px; line-height:1.25; }
+  header .spend b { font-size:18px; font-variant-numeric:tabular-nums; }
+  main { padding:16px 24px; max-width:1300px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+  @media (max-width:1000px) { .grid { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin:0 0 10px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
+  input, select, textarea { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; font:inherit; background:#fff; }
+  textarea { font-family:var(--mono); font-size:12px; }
+  .row { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .hint { font-size:11px; color:var(--muted); margin-top:3px; }
+  button { font:inherit; border:1px solid var(--line); background:var(--chip); padding:7px 14px; border-radius:6px; cursor:pointer; }
+  button.primary { background:var(--felt-2); border-color:var(--felt-2); color:#fff; font-weight:600; }
+  button.danger { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; align-items:center; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); font-weight:600; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  .clock { display:flex; gap:28px; align-items:baseline; flex-wrap:wrap; }
+  .big { font-size:34px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .muted { color:var(--muted); }
+  .ok { color:var(--felt-2); } .bad { color:var(--accent); } .warn { color:var(--warn); }
+  .timeline { display:flex; gap:4px; margin-top:10px; flex-wrap:wrap; }
+  .slot { font-size:11px; padding:3px 7px; border-radius:5px; background:var(--chip); border:1px solid var(--line); }
+  .slot.done { background:#e5f4e4; border-color:#bfe0bd; }
+  .slot.running { background:#f9eeda; border-color:#ebcf95; }
+  .slot.scored { font-weight:600; }
+  .me td { background:#eef7f1; font-weight:600; }
+  .tag { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--chip); }
+  .st-working { color:var(--felt-2); font-weight:600; } .st-queued { color:var(--warn); } .st-error { color:var(--accent); font-weight:600; }
+  pre { font-family:var(--mono); font-size:11.5px; white-space:pre-wrap; background:#faf9f6; border:1px solid var(--line);
+        border-radius:6px; padding:8px; max-height:420px; overflow:auto; margin:6px 0 0; }
+  .log { font-family:var(--mono); font-size:11.5px; max-height:220px; overflow:auto; }
+  .hidden { display:none; }
+  dialog { border:1px solid var(--line); border-radius:10px; width:min(900px,95vw); padding:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>♠ No Limit practice event</h1>
+  <a href="/">tournament engine</a>
+  <div class="spend" title="Model spend for the AI rivals (estimated from token usage and the model's price)">
+    AI rival spend<br><b id="spendGame">$0.00</b> this game<br><span id="spendAll">$0.00 all time</span>
+  </div>
+</header>
+<main>
+
+<!-- ======================= new game ======================= -->
+<section class="card" id="newCard">
+  <h2>New practice event</h2>
+  <div class="row">
+    <div><label>Your team</label><input id="team_name" value="Aniket & Mitch"></div>
+    <div><label>AI rival teams (0–7)</label><input id="rivals" type="number" min="0" max="7" value="7">
+      <div class="hint">Empty seats are filled with house bots that don't change.</div></div>
+    <div><label>Variant timing</label><select id="variant"></select></div>
+  </div>
+  <div class="row">
+    <div><label>Rival model (Ollama)</label><input id="model">
+      <div class="hint" id="priceHint"></div></div>
+    <div><label>Ollama URL</label><input id="base_url">
+      <div class="hint">Local Ollama app (signed in). For ollama.com directly use https://ollama.com/v1 + key.</div></div>
+    <div><label>API key (only for ollama.com)</label><input id="api_key" type="password" placeholder="optional"></div>
+  </div>
+  <details style="margin-top:10px"><summary class="muted">More settings</summary>
+    <div class="row">
+      <div><label>Points by place (1st..8th)</label><input id="points" value="50, 30, 20, 0, 0, 0, 0, 0"></div>
+      <div><label>Tables per practice round</label><input id="practice_iterations" type="number" value="1000"></div>
+      <div><label>Tables per scored round</label><input id="scored_iterations" type="number" value="10000">
+        <div class="hint">Official: 10,000. Lower it if your machine can't finish a round in 10 minutes.</div></div>
+    </div>
+    <div class="row">
+      <div><label>Parallel model requests</label><input id="concurrency" type="number" min="1" max="10" value="3">
+        <div class="hint">Ollama Free allows 1, Pro 3, Max 10.</div></div>
+      <div><label>Clock speed</label><input id="speed" type="number" step="1" min="1" value="1">
+        <div class="hint">1 = real time (the real event). Higher = faster, for testing only.</div></div>
+      <div><label>Simulation worker processes</label><input id="workers" type="number" min="0" value="0">
+        <div class="hint">0 = all cores. Leave a core free for accurate 1 ms timing.</div></div>
+    </div>
+  </details>
+  <div class="btns">
+    <button class="primary" id="startBtn">Start event</button>
+    <span class="hint">Starts the 60-minute build now. The AI rivals start working immediately.</span>
+  </div>
+</section>
+
+<!-- ======================= live event ======================= -->
+<div id="live" class="hidden">
+<section class="card">
+  <div class="clock">
+    <div><div class="muted" id="phaseLbl">Build phase</div><div class="big" id="mainClock">60:00</div></div>
+    <div><div class="muted">Next</div><div style="font-size:18px;font-weight:600" id="nextLbl">—</div></div>
+    <div><div class="muted">Running now</div><div id="runningLbl">—</div></div>
+    <div style="margin-left:auto" class="btns"><button id="newBtn">New event</button><button class="danger" id="stopBtn">Stop</button></div>
+  </div>
+  <div class="timeline" id="timeline"></div>
+</section>
+
+<div class="grid">
+<div>
+  <section class="card">
+    <h2>Your submission</h2>
+    <div id="cooldown" class="hint"></div>
+    <label>Bot file (.py, one file, standard library only, ≤ 100 MB)</label>
+    <input type="file" id="botFile" accept=".py">
+    <label>…or paste the code</label>
+    <textarea id="botSrc" rows="6" placeholder="class Agent:&#10;    def act(self, obs): ..."></textarea>
+    <div class="btns">
+      <button class="primary" id="submitBtn">Submit</button>
+      <button id="testBtn">Local test (3 tables)</button>
+      <a href="/api/sim/kit">starter kit</a>
+    </div>
+    <div id="submitMsg" class="hint" style="font-size:13px"></div>
+    <table style="margin-top:8px"><thead><tr><th>#</th><th>Event time</th><th>Size</th><th>Status</th></tr></thead><tbody id="subs"></tbody></table>
+  </section>
+  <section class="card">
+    <h2>Your downloads</h2>
+    <div class="hint">Available after each round: results, your bot's stats and your hand history.</div>
+    <table><tbody id="downloads"></tbody></table>
+  </section>
+</div>
+<div>
+  <section class="card">
+    <h2>Leaderboard (scored rounds, weighted 1–6)</h2>
+    <table><thead><tr><th>#</th><th>Team</th><th class="n">Score</th><th>Per round</th></tr></thead><tbody id="board"></tbody></table>
+  </section>
+  <section class="card">
+    <h2>Latest round: <span id="lastLbl">—</span></h2>
+    <table><thead><tr><th>#</th><th>Team</th><th>Ver.</th><th class="n">Avg pts</th><th class="n">Win %</th><th class="n">Top 3 %</th></tr></thead><tbody id="last"></tbody></table>
+  </section>
+</div>
+</div>
+
+<section class="card">
+  <h2>AI rival agents</h2>
+  <table><thead><tr><th>Team</th><th>Status</th><th class="n">Sessions</th><th class="n">Tool calls</th><th class="n">Submits</th>
+    <th class="n">Tokens in / out</th><th class="n">Cost</th><th>Last summary</th><th></th></tr></thead><tbody id="agents"></tbody></table>
+</section>
+
+<section class="card">
+  <h2>Event log</h2>
+  <div class="log" id="log"></div>
+</section>
+</div>
+
+<dialog id="agentDlg">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h3 id="dlgTitle" style="margin:0"></h3><button onclick="agentDlg.close()">Close</button></div>
+  <div class="hint" id="dlgPersona"></div>
+  <h4>NOTES.md</h4><pre id="dlgNotes"></pre>
+  <h4>Activity</h4><pre id="dlgLog"></pre>
+</dialog>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const mmss = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s/60); return m + ':' + String(s%60).padStart(2,'0'); };
+const money = x => '$' + (x < 10 ? x.toFixed(x < 1 ? 3 : 2) : x.toFixed(2));
+let D = null, lastDl = '';
+
+async function init() {
+  D = await (await fetch('/api/sim/defaults')).json();
+  $('model').value = D.model; $('base_url').value = D.base_url;
+  $('variant').innerHTML = D.variants.map(v => `<option value="${v.id}" title="${esc(v.description)}">${esc(v.name)}</option>`).join('');
+  priceHint(); $('model').oninput = priceHint;
+  setInterval(poll, 1000); poll();
+}
+function priceHint() {
+  let m = $('model').value.toLowerCase().replace(/-cloud$|:cloud$/, '');
+  const p = D.prices[m] || D.prices[m.split(':')[0]] || null;
+  $('priceHint').textContent = p ? `$${p[0]} in / $${p[2]} out per million tokens (cached in $${p[1]})` : 'price unknown: estimated at the default rate';
+}
+
+$('startBtn').onclick = async () => {
+  const body = { team_name: $('team_name').value, rivals: +$('rivals').value, variant: $('variant').value,
+    model: $('model').value, base_url: $('base_url').value, api_key: $('api_key').value,
+    points: $('points').value.split(/[ ,]+/).filter(Boolean).map(Number),
+    practice_iterations: +$('practice_iterations').value, scored_iterations: +$('scored_iterations').value,
+    concurrency: +$('concurrency').value, speed: +$('speed').value, workers: +$('workers').value };
+  $('startBtn').disabled = true;
+  await fetch('/api/sim/new', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  $('startBtn').disabled = false; poll();
+};
+$('stopBtn').onclick = async () => { if (confirm('Stop this event? The AI rivals stop too.')) await fetch('/api/sim/stop', {method:'POST'}); };
+$('newBtn').onclick = () => { $('newCard').classList.remove('hidden'); window.scrollTo(0,0); };
+
+async function sendBot(url) {
+  const f = $('botFile').files[0];
+  let opts;
+  if (f) { const fd = new FormData(); fd.append('file', f); opts = {method:'POST', body: fd}; }
+  else if ($('botSrc').value.trim()) opts = {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({source: $('botSrc').value})};
+  else { $('submitMsg').innerHTML = '<span class="bad">Choose a file or paste code first.</span>'; return null; }
+  return await (await fetch(url, opts)).json();
+}
+$('submitBtn').onclick = async () => {
+  const r = await sendBot('/api/sim/submit'); if (!r) return;
+  $('submitMsg').innerHTML = r.ok ? `<span class="ok">Accepted as v${r.version}. It plays from the next round.</span>` : `<span class="bad">Rejected: ${esc(r.problem)}</span>`;
+  poll();
+};
+$('testBtn').onclick = async () => {
+  $('submitMsg').textContent = 'Running local test…';
+  const r = await sendBot('/api/sim/localtest'); if (!r) return;
+  if (!r.ok) { $('submitMsg').innerHTML = `<span class="bad">${esc(r.problem)}</span>`; return; }
+  const places = r.tables.map(t => t.place).join(', ');
+  $('submitMsg').innerHTML = `Places: ${places} · decisions ${r.decisions} · <span class="${r.timeouts ? 'bad':'ok'}">timeouts ${r.timeouts}</span> · `
+    + `<span class="${r.errors ? 'bad':'ok'}">errors ${r.errors}</span> · avg ${r.avg_ms} ms, max ${r.max_ms} ms`
+    + (r.error_samples.length ? `<br><span class="bad">${esc(r.error_samples[0])}</span>` : '');
+};
+
+async function poll() {
+  const s = await (await fetch('/api/sim/state')).json();
+  $('spendGame').textContent = money(s.spend.game);
+  $('spendAll').textContent = money(s.spend.all_time) + ' all time';
+  if (!s.id) { $('live').classList.add('hidden'); return; }
+  $('live').classList.remove('hidden');
+  if (!document.activeElement || !$('newCard').contains(document.activeElement)) $('newCard').classList.add('hidden');
+  // clock
+  if (s.finished) { $('phaseLbl').textContent = 'Event over'; $('mainClock').textContent = 'Done'; }
+  else if (s.phase === 'build') { $('phaseLbl').textContent = 'Build phase — time left'; $('mainClock').textContent = mmss(s.build_left); }
+  else { $('phaseLbl').textContent = 'Scored rounds — event time'; $('mainClock').textContent = mmss(s.event_time); }
+  $('nextLbl').textContent = s.next_event ? `${s.next_event.label} in ${mmss(s.next_event.in)}` : '—';
+  const cr = s.current_round;
+  $('runningLbl').textContent = cr ? `${cr.label}: ${cr.done} / ${cr.total} tables` : '—';
+  $('timeline').innerHTML = s.schedule.map(e => `<span class="slot ${e.kind} ${e.done ? 'done' : ''} ${e.running ? 'running' : ''}">`
+    + `${e.kind === 'practice' ? 'P' + e.n : 'R' + e.n} · ${mmss(e.at)}</span>`).join('');
+  // my submissions
+  const me = s.teams.find(t => t.id === 'you');
+  $('cooldown').innerHTML = me.cooldown_s > 0 ? `<span class="warn">Next submission allowed in ${mmss(me.cooldown_s)} (event time)</span>` : '<span class="ok">You can submit now.</span>';
+  $('subs').innerHTML = me.submissions.slice().reverse().map(x => `<tr><td>v${x.n}</td><td>${mmss(x.t)}</td><td>${(x.bytes/1024).toFixed(1)} KB</td>`
+    + `<td>${x.ok ? '<span class="ok">accepted</span>' : '<span class="bad">' + esc(x.problem) + '</span>'}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Nothing submitted yet — the starter example bot plays for you until you do.</td></tr>';
+  // boards
+  $('board').innerHTML = s.leaderboard.map(r => `<tr class="${r.id === 'you' ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td class="n">${r.weighted.toFixed(2)}</td>`
+    + `<td class="muted">${Object.entries(r.per_round).map(([k,v]) => 'R' + k + ' ' + v).join(' · ')}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Starts with scored round 1 (minute 60).</td></tr>';
+  const lr = s.rounds[s.rounds.length - 1];
+  $('lastLbl').textContent = lr ? lr.label : '—';
+  $('last').innerHTML = lr ? lr.results.map(r => `<tr class="${r.team === me.name ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td>v${r.version}</td>`
+    + `<td class="n">${r.avg_points.toFixed(2)}</td><td class="n">${(100*r.win_rate).toFixed(1)}</td><td class="n">${(100*r.top3_rate).toFixed(1)}</td></tr>`).join('') : '';
+  // agents
+  $('agents').innerHTML = s.agents.map(a => `<tr><td><b>${esc(a.name)}</b></td><td class="st-${a.status}">${esc(a.status)}<div class="hint">${esc(a.detail)}</div></td>`
+    + `<td class="n">${a.iterations}</td><td class="n">${a.steps}</td><td class="n">${a.submissions}</td>`
+    + `<td class="n">${(a.tokens_in/1000).toFixed(0)}k / ${(a.tokens_out/1000).toFixed(0)}k</td><td class="n">${money(a.cost)}</td>`
+    + `<td class="hint" style="max-width:320px">${esc(a.last_summary).slice(0,220)}</td><td><button onclick="openAgent('${a.team}')">View</button></td></tr>`).join('')
+    || '<tr><td colspan="9" class="muted">No AI rivals in this event.</td></tr>';
+  $('log').innerHTML = s.log.slice().reverse().map(l => `<div><span class="muted">${mmss(l.t)}</span> ${esc(l.msg)}</div>`).join('');
+  // downloads (refresh when rounds change)
+  const key = s.rounds.length + ':' + s.id;
+  if (key !== lastDl) {
+    lastDl = key;
+    const dl = await (await fetch('/api/sim/downloads')).json();
+    $('downloads').innerHTML = dl.map(d => `<tr><td>${esc(d.round.replace('_', ' '))}</td><td><a href="/api/sim/download/${d.path}">${esc(d.file)}</a></td>`
+      + `<td class="n muted">${(d.bytes/1024).toFixed(0)} KB</td></tr>`).join('') || '<tr><td class="muted">Nothing yet.</td></tr>';
+  }
+}
+
+async function openAgent(tid) {
+  const a = await (await fetch('/api/sim/agent/' + tid)).json();
+  $('dlgTitle').textContent = a.name + ' — ' + a.status;
+  $('dlgPersona').textContent = a.persona;
+  $('dlgNotes').textContent = a.notes || '(empty)';
+  $('dlgLog').textContent = a.transcript.map(x => `[${mmss(x.t)}] ${x.role}: ${x.text}`).join('\n\n');
+  $('agentDlg').showModal();
+}
+init();
+</script>
+</body>
+</html>

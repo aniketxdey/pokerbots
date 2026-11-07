@@ -55,7 +55,7 @@ class Config:
     round_interval_minutes: float = 0.0  # >0 = live mode: wait between rounds, re-freeze bots
     practice: bool = False           # practice round: 1 round, unscored
     sample_log_hands: int = 200      # hands of the first table to keep as a readable log
-    history_bot: str = ""            # bot id / name / file whose hand histories are exported ("" = off)
+    history_bot: str = ""            # bot id / name / file whose hand histories are exported; "*" = every bot
     history_tables: int = 25         # max tables of hand history per round
 
     @classmethod
@@ -175,7 +175,14 @@ def _run_chunk(task):
     log = None
     tables_played = 0
     hist = []
-    focus = _focus_index(bots, cfg.history_bot) if hist_quota else None
+    if not hist_quota:
+        focus = set()
+    elif cfg.history_bot == "*":
+        focus = set(range(len(bots)))          # every entrant gets its own view
+    else:
+        f1 = _focus_index(bots, cfg.history_bot)
+        focus = set() if f1 is None else {f1}
+    hcount = {}
     for it in range(it_start, it_end):
         rng = random.Random(f"{seed}-{round_idx}-{it}")
         order = list(range(nb))
@@ -205,20 +212,24 @@ def _run_chunk(task):
                     timed_call(sl.agent.new_table, (info,), cfg.callback_time_limit_ms / 1000.0,
                                cfg.time_mode, sl.stats, False)
             tl = [] if (want_log and log is None) else None
-            rec_seat = None
-            if focus is not None and len(hist) < hist_quota and focus in members:
-                rec_seat = next(k for k, sl in enumerate(slots) if sl.idx == focus and sl.scoring)
-            table = Table(slots, cfg, rng, log=tl, record_seat=rec_seat)
+            rec = {}
+            for k, sl in enumerate(slots):
+                if sl.scoring and sl.idx in focus and sl.idx not in rec.values() \
+                        and hcount.get(sl.idx, 0) < hist_quota:
+                    rec[k] = sl.idx
+            table = Table(slots, cfg, rng, log=tl, record_seat=list(rec) if rec else None)
             if tl is not None:
                 tl.append("Seats: " + ", ".join(f"S{i}={s.name}" for i, s in enumerate(slots)))
             res = table.play()
             tables_played += 1
             if tl is not None:
                 log = _trim_log(tl, cfg.sample_log_hands)
-            if rec_seat is not None:
-                hist.append({"round": round_idx + 1, "table": len(hist) + 1, "iteration": it + 1,
-                             "bot": bots[focus]["name"], "place": res.places[rec_seat] or ts,
-                             "points": res.points[rec_seat], "hands": table.records})
+            for k, bidx in rec.items():
+                hcount[bidx] = hcount.get(bidx, 0) + 1
+                hist.append({"round": round_idx + 1, "table": hcount[bidx], "iteration": it + 1,
+                             "bot": bots[bidx]["name"], "bot_id": bots[bidx]["id"],
+                             "place": res.places[k] or ts, "points": res.points[k],
+                             "hands": [h for h in table.records if h["my_seat"] == k]})
             for seat, sl in enumerate(slots):
                 if not sl.scoring:
                     continue
@@ -313,8 +324,10 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
                 stats[i].merge(BotStats.from_dict(a["stats"]))
             if res["log"] is not None:
                 log = res["log"]
-            if res.get("history"):
-                history.extend(res["history"][:max(0, cfg.history_tables - len(history))])
+            for h in res.get("history") or []:
+                n_have = sum(1 for x in history if x["bot_id"] == h["bot_id"])
+                if n_have < cfg.history_tables:
+                    history.append(h)
             done += res["iterations"]
             n_tables += res["tables"]
             if progress:
@@ -330,9 +343,11 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
             pool.close()
         pool.join()
     summary = _round_summary(snap, total, stats, cfg)
-    history.sort(key=lambda h: h["iteration"])
-    for k, h in enumerate(history):
-        h["table"] = k + 1
+    history.sort(key=lambda h: (h["bot_id"], h["iteration"]))
+    seen = {}
+    for h in history:
+        seen[h["bot_id"]] = seen.get(h["bot_id"], 0) + 1
+        h["table"] = seen[h["bot_id"]]
     return {"round": round_idx + 1, "iterations_done": done, "tables": n_tables,
             "seconds": time.time() - t0, "bots": summary, "sample_log": log or [],
             "stopped": stopped, "hand_history": history}
@@ -463,7 +478,7 @@ def write_history(tables, path):
     """One JSON object per hand (JSON Lines), table info merged in, like a practice-round download."""
     with open(path, "w") as f:
         for t in tables:
-            meta = {k: t[k] for k in ("round", "table", "iteration", "bot", "place", "points")}
+            meta = {k: t.get(k) for k in ("round", "table", "iteration", "bot", "place", "points")}
             for h in t["hands"]:
                 f.write(json.dumps(dict(meta, **h)) + "\n")
     return path

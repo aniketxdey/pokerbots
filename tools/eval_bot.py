@@ -99,12 +99,15 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--time-mode", default="hard")
     ap.add_argument("--exclude", nargs="*", default=[], help="bot ids to leave out of the field")
+    ap.add_argument("--field", nargs="*", default=[], help="only these bot ids as opponents (7+ needed)")
     a = ap.parse_args()
     paths = list_bot_files(os.path.join(ROOT, "bots"))
     snap = snapshot(paths)
     ids = [b["id"] for b in snap]
     excl = set(a.exclude) | {a.hero, a.baseline}
     field = [i for i in ids if i not in excl]
+    if a.field:
+        field = [i for i in a.field if i in ids]
     cfg = Config(variant=a.variant, time_mode=a.time_mode).validate()
     t0 = time.time()
     r1 = run(a.hero, field, snap, cfg, a.tables, a.seed, a.workers)

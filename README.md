@@ -194,6 +194,62 @@ click a cell to see its exact value in the formula bar, move with the arrow keys
 "Export CSV" for the current sheet. Numeric columns are heat-mapped from green (better) to
 red (worse).
 
+## Practice event simulator (`/sim`)
+
+A full rehearsal of the regional: your team against up to 7 **AI rival teams** that build and
+improve their own bots during the event, the way real teams do with a coding assistant.
+
+```bash
+python server.py        # then open http://127.0.0.1:5000/sim
+```
+
+**Event format (same as the real one):** a 60-minute build phase with an unscored practice
+round at minutes 10, 20, 30, 40 and 50; then six scored rounds at minutes 60, 80, …, 160,
+weighted 1–6. Each round freezes every team's current submission at its start. Submissions:
+one Python file with `class Agent`, standard library only, ≤ 100 MB, one accepted submission
+per 5 minutes (rejected files don't use the slot). Until you submit, the starter example bot
+plays for you. Tables follow the engine's official rules (8 bots, 2,000 chips, blinds up every
+25 hands, 200-hand cap with ICM, 1 ms per decision, no network, state reset per table,
+anonymous opponents). Variant: Discard & Reveal (pick the timing).
+
+**After every round** each team gets the same downloads: `results.json` (every team's points,
+win and top-3 rates), `my_bot_stats.json` (decisions, timeouts, errors, timings) and
+`hand_history.jsonl` (its own hands, opponents shown as seat numbers). The page also has the
+starter kit (rules, API, example bot, local test harness) and a **Local test** button that plays
+your bot for 3 tables under the 1 ms limit.
+
+**AI rivals.** Each rival is a coding agent with the tools a team's AI would have: list, read
+and search files, write and edit files, run Python scripts (e.g. to analyze its hand
+history), run the local test, and submit. It works in its own workspace with the same rules,
+starter kit and downloads you get. Each team has a different style (methodical, aggressive,
+math-first, exploitative, simple, variant-focused, balanced). A rival works only when there
+is new data: once at the start (the starter kit) and once after each round's downloads,
+up to 40 tool calls per session. It keeps a `NOTES.md` as its memory between sessions. Click
+**View** to see an agent's notes and activity. The number of rivals (0–7) is set when you
+start an event; empty seats are filled with fixed house bots.
+
+**Model.** Rivals call any OpenAI-compatible endpoint; the default is Ollama with
+`gpt-oss:120b-cloud`, OpenAI's open-weight agentic model (the event's teams use OpenAI's
+Astra in Codex) and one of the cheapest capable models on Ollama Cloud ($0.15 in / $0.60
+out per million tokens). Setup:
+
+```bash
+# install Ollama from https://ollama.com, then:
+ollama signin
+ollama run gpt-oss:120b-cloud      # first run registers the cloud model; type /bye to exit
+```
+
+Ollama Free allows 1 request at a time, Pro ($20/month, $60 of usage included) 3, Max 10:
+set "Parallel model requests" to match. The **spend tracker** (top right) estimates cost from
+the token counts each response reports and the model's price (`sim/config.py`); it shows
+this event and all events. Use model `mock` to test the simulator offline at no cost.
+
+Notes: rival agents run the Python they write on your machine (inside their workspace folder),
+as a coding assistant would. A round's tables run on all cores; leave one free (Simulation
+worker processes) so the 1 ms timing stays accurate. If your machine can't finish 10,000
+tables in a round's 20 minutes, lower "Tables per scored round". Event data is saved under
+`sim_runs/`.
+
 ## Hand histories
 
 Like the practice-round downloads at the event, the engine can export every hand a chosen bot
@@ -344,6 +400,8 @@ engine/      evaluator.py  variants.py (45 variants + evaluators)  table.py (sit
 compat/      framework emulation layers for the ported bots
 bots/        one file per bot (drop yours here, up to 64); sf_contender.py is ours
 static/      the web UI
+sim/         practice-event simulator: game.py (schedule, submissions, rounds), agent.py (AI rivals),
+             llm.py (Ollama/OpenAI-compatible client), web.py (routes), localtest.py; UI in static/sim.html
 tools/       build_sf_tables.py (SF Contender's tables)  eval_bot.py (paired bot evaluation)
 server.py    Flask app      run_tournament.py   CLI      tests/   engine tests
 ```

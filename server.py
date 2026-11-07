@@ -28,6 +28,9 @@ RESULTS_DIR = os.path.join(ROOT, "results")
 app = Flask(__name__, static_folder=os.path.join(ROOT, "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_BYTES + 1024 * 1024
 
+from sim.web import bp as sim_bp  # noqa: E402  practice-event simulator at /sim
+app.register_blueprint(sim_bp)
+
 _lock = threading.Lock()
 _state = {"phase": "idle"}
 _stop = threading.Event()

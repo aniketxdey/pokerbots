@@ -52,7 +52,9 @@ C2I = {r + s: i * 4 + j for i, r in enumerate(RANKS) for j, s in enumerate(SUITS
 I2C = {v: k for k, v in C2I.items()}
 
 # time budget per decision (seconds). The official limit is 1 ms; stay well inside it.
-MC_BUDGET = 0.00034
+MC_BUDGET = 0.00032
+MC_BUDGET_ICM = 0.00018   # leave room for the ICM calculation
+RISK_PREMIUM = 0.07
 REVEAL_BUDGET = 0.00030
 
 
@@ -696,9 +698,10 @@ class Agent:
             return self._safe(obs)
 
         # ---- facing a raise
-        deadline = t0 + MC_BUDGET
-        e = self._equity(obs, hero, [], deadline)
         allin_call = to_call >= obs.my_stack * 0.85
+        icm_soon = alive <= 5 and (allin_call or any(players[r].all_in for r in raisers))
+        deadline = t0 + (MC_BUDGET_ICM if icm_soon else MC_BUDGET)
+        e = self._equity(obs, hero, [], deadline)
         pot_odds = to_call / float(pot + to_call)
         nopp = len([x for x in others if x.seat in self.pf_raisers or x.seat in self.pf_callers])
         if allin_call or (any(players[r].all_in for r in raisers)):
@@ -750,11 +753,18 @@ class Agent:
             except Exception:
                 pass
         pot_odds = risk / float(pot + risk)
-        return e >= pot_odds + 0.03
+        # early in the sit-and-go, stacking off is costly (only the top 3 score): demand a premium
+        # that grows with how many big blinds are at risk
+        premium = 0.03
+        if alive > 5:
+            premium += RISK_PREMIUM * min(1.0, risk / (60.0 * obs.big_blind))
+        return e >= pot_odds + premium
 
     # ------------------------------------------------------------ postflop
     def _postflop(self, obs, hero, board, t0):
-        deadline = t0 + MC_BUDGET
+        alive_n = sum(1 for x in obs.players if not x.eliminated)
+        icm_soon = alive_n <= 5 and obs.to_call >= obs.my_stack * 0.85
+        deadline = t0 + (MC_BUDGET_ICM if icm_soon else MC_BUDGET)
         e = self._equity(obs, hero, board, deadline)
         me = obs.seat
         others = [x for x in obs.players if x.seat != me and x.in_hand]

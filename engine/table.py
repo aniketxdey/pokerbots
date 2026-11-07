@@ -74,8 +74,15 @@ class Table:
     def __init__(self, bots, cfg, rng, log=None, record_seat=None):
         self.cfg = cfg
         # hand history (like the practice-round downloads): one dict per hand, seen from record_seat
+        # record_seat: one seat, or a list of seats (each gets its own view of every hand)
+        if record_seat is None:
+            self.record_seats = []
+        elif isinstance(record_seat, (list, tuple, set)):
+            self.record_seats = list(record_seat)
+        else:
+            self.record_seats = [record_seat]
         self.record_seat = record_seat
-        self.records = [] if record_seat is not None else None
+        self.records = [] if self.record_seats else None
         self._dealt = {}
         self.rng = rng
         self.n = len(bots)
@@ -1023,9 +1030,12 @@ class Table:
                 self._call(i, "hand_over", res)
 
     def _record_hand(self, shown, winnings, deltas, busted):
-        me = self.record_seat
+        for me in self.record_seats:
+            self._record_one(me, shown, winnings, deltas, busted)
+
+    def _record_one(self, me, shown, winnings, deltas, busted):
         seats = self.seats
-        if me is None or me not in self._dealt:
+        if me not in self._dealt:
             return  # the recorded bot was not dealt in (already eliminated)
         self.records.append({
             "hand": self.hand_number, "variant": self.v.id, "betting": self._structure,

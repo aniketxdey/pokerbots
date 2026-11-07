@@ -1,0 +1,68 @@
+"""Defaults, model prices and rival personas for the practice-event simulator."""
+
+# Ollama exposes an OpenAI-compatible API. With the desktop app signed in, cloud models are
+# served through the local server; without it, use https://ollama.com/v1 plus an API key.
+DEFAULT_BASE_URL = "http://localhost:11434/v1"
+DEFAULT_MODEL = "gpt-oss:120b-cloud"
+
+# USD per million tokens (input, cached input, output), from ollama.com/pricing as of
+# 2026-10-07. Prices change: edit here or in the UI. Unknown models fall back to "default".
+PRICES = {
+    "gpt-oss:120b": (0.15, 0.014, 0.60),
+    "gpt-oss:20b": (0.07, 0.035, 0.30),
+    "deepseek-v4.1-flash": (0.30, 0.006, 1.20),
+    "deepseek-v4-pro": (1.32, 0.044, 3.96),
+    "gemma4": (0.14, 0.05, 0.40),
+    "glm-5.3-flash": (0.15, 0.03, 0.50),
+    "glm-5.2": (1.40, 0.26, 4.40),
+    "kimi-k2.6": (0.95, 0.16, 4.00),
+    "kimi-k2.7-code": (0.95, 0.19, 4.00),
+    "kimi-k3": (3.00, 0.30, 15.00),
+    "minimax-m2.7": (0.30, 0.06, 1.20),
+    "nemotron-3-super": (0.015, 0.015, 0.60),
+    "mock": (0.0, 0.0, 0.0),
+    "default": (1.00, 0.10, 4.00),
+}
+
+
+def price_for(model):
+    m = (model or "").lower()
+    for suffix in ("-cloud", ":cloud"):
+        if m.endswith(suffix):
+            m = m[: -len(suffix)]
+    if m in PRICES:
+        return PRICES[m]
+    base = m.split(":")[0]
+    for k in PRICES:
+        if k == base or k.startswith(base + ":"):
+            return PRICES[k]
+    return PRICES["default"]
+
+
+# The official schedule (minutes): 60-minute build with an unscored practice round every 10
+# minutes, then six scored rounds 20 minutes apart. Each round freezes the current submission.
+BUILD_MINUTES = 60
+PRACTICE_EVERY = 10
+SCORED_ROUNDS = 6
+SCORED_GAP = 20
+SUBMIT_COOLDOWN_S = 300          # one submission per 5 minutes
+MAX_BOT_BYTES = 100 * 1024 * 1024
+
+# Each rival team prompts its AI differently, as real teams do. Personas only set the team's
+# starting instructions; every team gets the same rules, starter kit and data.
+PERSONAS = [
+    ("Team Atlas", "You are methodical. Start from a solid tight-aggressive baseline and improve it with "
+                   "careful analysis of the hand histories. Prefer measured, evidence-backed changes."),
+    ("Team Blitz", "You believe aggression wins sit-and-gos. Build a bot that applies pressure, steals blinds "
+                   "and shoves often, then tune it from the data."),
+    ("Team Cipher", "You are a math-first team: equity calculations, pot odds and push/fold charts. Keep the bot "
+                    "fast and precise."),
+    ("Team Drift", "You are an exploitative team: study what the other bots do in the downloads and build "
+                   "counter-strategies against the most common weaknesses."),
+    ("Team Ember", "You value simplicity and robustness: a small set of clear rules that never crash or time "
+                   "out, adjusted round by round."),
+    ("Team Flux", "You focus on the variant's special mechanic (discard and reveal) and try to gain an edge "
+                  "from how cards are kept, revealed and read."),
+    ("Team Gale", "You are a balanced, game-theory-minded team: avoid being exploitable, mix strategies, and "
+                  "only deviate when the data clearly supports it."),
+]
