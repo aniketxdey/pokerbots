@@ -50,6 +50,11 @@
         border-radius:6px; padding:8px; max-height:420px; overflow:auto; margin:6px 0 0; }
   .log { font-family:var(--mono); font-size:11.5px; max-height:220px; overflow:auto; }
   .hidden { display:none; }
+  .rules { display:grid; grid-template-columns:1fr 1fr; gap:4px 28px; }
+  @media (max-width:1000px) { .rules { grid-template-columns:1fr; } }
+  .rules h3 { font-size:13px; margin:10px 0 4px; }
+  .rules ul { margin:0; padding-left:18px; } .rules li { margin:2px 0; }
+  .variant { background:#eef7f1; border:1px solid #cfe5d6; border-radius:8px; padding:10px 12px; }
   dialog { border:1px solid var(--line); border-radius:10px; width:min(900px,95vw); padding:16px; }
 </style>
 </head>
@@ -101,6 +106,12 @@
   </div>
 </section>
 
+
+<!-- ======================= rules ======================= -->
+<section class="card" id="rulesCard">
+  <h2>Rules for this event</h2>
+  <div id="rulesBody"></div>
+</section>
 <!-- ======================= live event ======================= -->
 <div id="live" class="hidden">
 <section class="card">
@@ -180,6 +191,8 @@ async function init() {
   $('model').value = D.model; $('base_url').value = D.base_url;
   $('variant').innerHTML = D.variants.map(v => `<option value="${v.id}" title="${esc(v.description)}">${esc(v.name)}</option>`).join('');
   priceHint(); $('model').oninput = priceHint;
+  ['variant','points','practice_iterations','scored_iterations'].forEach(id => $(id).addEventListener('input', () => renderRules(null)));
+  renderRules(null);
   setInterval(poll, 1000); poll();
 }
 function priceHint() {
@@ -228,7 +241,8 @@ async function poll() {
   const s = await (await fetch('/api/sim/state')).json();
   $('spendGame').textContent = money(s.spend.game);
   $('spendAll').textContent = money(s.spend.all_time) + ' all time';
-  if (!s.id) { $('live').classList.add('hidden'); return; }
+  if (!s.id) { $('live').classList.add('hidden'); renderRules(null); return; }
+  renderRules(s);
   $('live').classList.remove('hidden');
   if (!document.activeElement || !$('newCard').contains(document.activeElement)) $('newCard').classList.add('hidden');
   // clock
@@ -269,6 +283,71 @@ async function poll() {
     $('downloads').innerHTML = dl.map(d => `<tr><td>${esc(d.round.replace('_', ' '))}</td><td><a href="/api/sim/download/${d.path}">${esc(d.file)}</a></td>`
       + `<td class="n muted">${(d.bytes/1024).toFixed(0)} KB</td></tr>`).join('') || '<tr><td class="muted">Nothing yet.</td></tr>';
   }
+}
+
+
+function renderRules(s) {
+  // settings: from the running event if there is one, else from the form
+  const g = s && s.id ? s.settings : null;
+  const vid = g ? g.variant : $('variant').value;
+  const v = (D.variants.find(x => x.id === vid) || D.variants[0]);
+  const pts = g ? g.points : $('points').value.split(/[ ,]+/).filter(Boolean).map(Number);
+  const pIt = g ? g.practice_iterations : +$('practice_iterations').value;
+  const sIt = g ? g.scored_iterations : +$('scored_iterations').value;
+  const ord = ['1st','2nd','3rd','4th','5th','6th','7th','8th'];
+  const paid = pts.map((p, i) => p ? `${ord[i]} ${p}` : null).filter(Boolean).join(', ');
+  const timing = {
+    sf2026_reveal: 'after the flop betting round, before the turn (Crazy Pineapple timing; the best guess at the SF game)',
+    sf2026_reveal_preflop: 'after the preflop betting round, before the flop',
+    sf2026_reveal_flop: 'right after the flop is dealt, before the flop betting',
+    sf2026_reveal_deal: 'right after the deal, before any betting'}[vid] || '';
+  const key = vid + pts.join() + pIt + sIt;
+  if (renderRules.key === key) return; renderRules.key = key;
+  $('rulesBody').innerHTML = `
+  <div class="variant"><b>Variant: ${esc(v.name)}</b>
+    <ul>
+      <li>Everyone is dealt <b>3 hole cards</b>, then a normal Hold'em hand: 5 shared cards (flop 3, turn 1, river 1) with betting before the flop and after each new card.</li>
+      <li>Decision point — ${esc(timing)}: every player still in the hand <b>discards 1 card face down</b>, <b>keeps 1 hidden</b> and <b>turns 1 face up</b> for the whole table.</li>
+      <li>The face-up card still plays in your hand, like a stud up card. You make the best 5-card hand from your 2 cards and the 5 shared cards.</li>
+      <li>Everyone chooses at the same time, so nobody sees another reveal before choosing.</li>
+      <li>Bots answer <code>discard(obs)</code>, then <code>reveal(obs)</code>; opponents' face-up cards are in <code>obs.players[seat].up_cards</code>. A bot without <code>reveal()</code> shows its lowest card.</li>
+      <li class="muted">Unconfirmed on the real day: the exact timing, and whether reveals happen at once or in seat order. Check the starter kit first.</li>
+    </ul>
+  </div>
+  <div class="rules">
+    <div>
+      <h3>Schedule</h3>
+      <ul>
+        <li>60-minute build phase. Unscored practice rounds at minutes 10, 20, 30, 40 and 50.</li>
+        <li>Then 6 scored rounds, 20 minutes apart (minutes 60, 80, 100, 120, 140, 160).</li>
+        <li>Each round uses the bot you had submitted when it started. Later edits count from the next round.</li>
+        <li>Score = weighted sum of average points per table: round 1 counts ×1, round 2 ×2 … round 6 ×6.</li>
+      </ul>
+      <h3>Submissions</h3>
+      <ul>
+        <li>One Python file defining <code>class Agent</code>. Standard library only. At most 100 MB.</li>
+        <li>One accepted submission per 5 minutes. Rejected files don't use the slot.</li>
+        <li>Until you submit, the starter example bot (check or fold) plays for you.</li>
+      </ul>
+      <h3>After each round</h3>
+      <ul><li>Download results for every team, your bot's stats (timeouts, errors, speed) and your own hand history. Opponents appear as seat numbers.</li></ul>
+    </div>
+    <div>
+      <h3>Tables</h3>
+      <ul>
+        <li>8-bot sit-and-go, random seats. ${pIt.toLocaleString()} tables per practice round, ${sIt.toLocaleString()} per scored round.</li>
+        <li>2,000 chips each. Blinds 10/20, rising every 25 hands: 15/30, 25/50, 40/80, 60/120, 100/200, 150/300, 250/500.</li>
+        <li>No-limit betting.</li>
+        <li>A table ends when one bot has all the chips or after 200 hands. At 200 hands, the remaining places are paid by ICM (chip stacks → chance of each place).</li>
+        <li>Points by finishing place: ${esc(paid || 'none set')}; everyone else 0.</li>
+      </ul>
+      <h3>Bot limits</h3>
+      <ul>
+        <li><b>1 ms per decision</b> (act, discard, reveal and every callback). If a bot is late or crashes, it checks if it can, otherwise folds.</li>
+        <li>No network. Bot state resets at every table. Opponents are anonymous.</li>
+      </ul>
+    </div>
+  </div>`;
 }
 
 async function openAgent(tid) {
