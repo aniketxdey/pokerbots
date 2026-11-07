@@ -190,22 +190,35 @@ class Table:
             legal, mn, mx = self._legal(i, current_bet) if phase == "bet" else ([phase], None, None)
         else:
             legal, mn, mx = legal_info
+        seats = self.seats
         players = []
-        for j, x in enumerate(self.seats):
+        ups = {}
+        num_active = 0
+        pot = 0
+        for j, x in enumerate(seats):
+            up = [CARD_STRS[c] for c in x.up] if x.up else []
+            if up:
+                ups[j] = up
+            if not x.eliminated:
+                num_active += 1
+            pot += x.contributed
             players.append(PlayerView(j, x.stack, x.bet, x.contributed, x.folded, x.all_in,
-                                      x.in_hand and not x.folded, x.eliminated, _cs(x.up)))
+                                      x.in_hand and not x.folded, x.eliminated, up))
         v = self.v
+        down = [CARD_STRS[c] for c in s.hole]
+        my_up = ups.get(i, [])
         obs = Observation(
             seat=i, hand_number=self.hand_number, street=self._street_value(),
             street_name=self._street_name(), round_index=self._round,
-            hole_cards=_cs(s.hole) + _cs(s.up), down_cards=_cs(s.hole), up_cards=_cs(s.up),
-            board=_cs(self.board), board2=_cs(self.board2), pot=self._pot(), to_call=to_call,
+            hole_cards=down + my_up, down_cards=down, up_cards=list(my_up),
+            board=[CARD_STRS[c] for c in self.board], board2=[CARD_STRS[c] for c in self.board2],
+            pot=pot, to_call=to_call,
             my_bet=s.bet, my_stack=s.stack, my_contributed=s.contributed,
             current_bet=current_bet, min_raise_to=mn, max_raise_to=mx, legal_actions=legal,
             small_blind=self._sb, big_blind=self._bb, ante=self._ante, bring_in=self._bring_in,
             button=self.button, small_blind_seat=self._sb_seat, big_blind_seat=self._bb_seat,
-            num_players=self.n, num_active=sum(1 for x in self.seats if not x.eliminated),
-            players=players, players_up_cards={j: _cs(x.up) for j, x in enumerate(self.seats) if x.up},
+            num_players=self.n, num_active=num_active,
+            players=players, players_up_cards={j: list(u) for j, u in ups.items()},
             history=list(self.history), starting_stack=self.cfg.starting_stack,
             hands_until_blinds_up=self._until_up, max_hands=self.cfg.max_hands,
             time_limit_ms=self.cfg.time_limit_ms,

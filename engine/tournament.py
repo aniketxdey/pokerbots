@@ -295,7 +295,8 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
     nb = len(snap)
     workers = cfg.workers if cfg.workers > 0 else (os.cpu_count() or 1)
     workers = max(1, min(workers, cfg.iterations))
-    n_chunks = max(1, min(cfg.iterations, workers * 16))
+    # small chunks (<= ~25 iterations) keep progress smooth and let a stop request land quickly
+    n_chunks = max(1, min(cfg.iterations, max(workers * 16, -(-cfg.iterations // 25))))
     bounds = [round(cfg.iterations * k / n_chunks) for k in range(n_chunks + 1)]
     tasks = [(round_idx, bounds[k], bounds[k + 1], seed, k == 0)
              for k in range(n_chunks) if bounds[k + 1] > bounds[k]]
@@ -317,7 +318,17 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
     pool = ctx.Pool(workers, initializer=_worker_init, initargs=(slim, cfg_dict))
     stopped = False
     try:
-        for res in pool.imap_unordered(_run_chunk, tasks):
+        it = pool.imap_unordered(_run_chunk, tasks)
+        remaining = len(tasks)
+        while remaining:
+            try:
+                res = it.next(timeout=0.5)
+            except mp.TimeoutError:
+                if stop is not None and stop.is_set():
+                    stopped = True
+                    break
+                continue
+            remaining -= 1
             for i, a in enumerate(res["agg"]):
                 for k in total:
                     total[k][i] += a[k]

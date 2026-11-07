@@ -251,7 +251,8 @@ async function poll() {
   else { $('phaseLbl').textContent = 'Scored rounds — event time'; $('mainClock').textContent = mmss(s.event_time); }
   $('nextLbl').textContent = s.next_event ? `${s.next_event.label} in ${mmss(s.next_event.in)}` : '—';
   const cr = s.current_round;
-  $('runningLbl').textContent = cr ? `${cr.label}: ${cr.done} / ${cr.total} tables` : '—';
+  $('runningLbl').innerHTML = cr ? `${esc(cr.label)}: ${cr.done.toLocaleString()} / ${cr.total.toLocaleString()} tables`
+    + (cr.eta_s != null ? `<div class="hint">${cr.tables_per_s} tables/s · about ${mmss(cr.eta_s)} real time left</div>` : '') : '—';
   $('timeline').innerHTML = s.schedule.map(e => `<span class="slot ${e.kind} ${e.done ? 'done' : ''} ${e.running ? 'running' : ''}">`
     + `${e.kind === 'practice' ? 'P' + e.n : 'R' + e.n} · ${mmss(e.at)}</span>`).join('');
   // my submissions
@@ -265,7 +266,8 @@ async function poll() {
     + `<td class="muted">${Object.entries(r.per_round).map(([k,v]) => 'R' + k + ' ' + v).join(' · ')}</td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">Starts with scored round 1 (minute 60).</td></tr>';
   const lr = s.rounds[s.rounds.length - 1];
-  $('lastLbl').textContent = lr ? lr.label : '—';
+  $('lastLbl').innerHTML = lr ? esc(lr.label) + ` <span class="muted" style="text-transform:none">· ${lr.iterations.toLocaleString()} tables`
+    + (lr.cut_short ? ` <span class="warn">(cut short: planned ${lr.planned.toLocaleString()})</span>` : '') + '</span>' : '—';
   $('last').innerHTML = lr ? lr.results.map(r => `<tr class="${r.team === me.name ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td>v${r.version}</td>`
     + `<td class="n">${r.avg_points.toFixed(2)}</td><td class="n">${(100*r.win_rate).toFixed(1)}</td><td class="n">${(100*r.top3_rate).toFixed(1)}</td></tr>`).join('') : '';
   // agents

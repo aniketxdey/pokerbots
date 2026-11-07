@@ -295,11 +295,25 @@ class Game:
         def progress(r, done, total, summary, elapsed):
             if self.current_round is not None:
                 self.current_round["done"] = done
+                self.current_round["tables_per_s"] = round(done / elapsed, 2) if elapsed > 0 else None
+                # estimated real seconds to finish
+                self.current_round["eta_s"] = round((total - done) * elapsed / done) if done else None
 
+        # The round must finish before the next round's freeze, as on the real schedule. If this
+        # machine is too slow for the full table count, the round stops 30 s (event time) early and
+        # is scored on the tables completed so far.
+        nxt = next((x for x in self.schedule if x["at"] > e["at"]), None)
+        end_at = (nxt["at"] if nxt else e["at"] + C.SCORED_GAP * 60) - 30
+        deadline_real = self.started_real + end_at / self.speed
         res = run_round(cfg, snap, 0, cfg.seed, progress=progress,
-                        stop=_StopFlag(lambda: self.stopped))
+                        stop=_StopFlag(lambda: self.stopped or time.time() > deadline_real))
         hist = res.pop("hand_history", [])
+        cut = res["iterations_done"] < iters and not self.stopped
+        if cut:
+            self._log(f"{label}: this machine finished {res['iterations_done']:,} of {iters:,} tables before "
+                      f"the next round; scored on those (lower the table count to run full rounds)")
         rd = {"kind": e["kind"], "n": e["n"], "label": label, "iterations": res["iterations_done"],
+              "planned": iters, "cut_short": cut,
               "seconds": round(res["seconds"], 1), "finished_t": round(self.event_time()),
               "bots": res["bots"], "versions": {s["id"]: s["version"] for s in snap},
               "weight": (e["n"] if e["kind"] == "scored" else 0)}
@@ -404,7 +418,8 @@ class Game:
             "schedule": [{"kind": e["kind"], "n": e["n"], "at": e["at"], "done": bool(e.get("done")),
                           "running": bool(e.get("started") and not e.get("done"))} for e in self.schedule],
             "teams": [tm.to_dict(t) for tm in self.teams],
-            "rounds": [{"kind": r["kind"], "n": r["n"], "label": r["label"], "results": self._results_table(r)}
+            "rounds": [{"kind": r["kind"], "n": r["n"], "label": r["label"], "results": self._results_table(r),
+                        "iterations": r["iterations"], "planned": r.get("planned"), "cut_short": r.get("cut_short")}
                        for r in self.rounds],
             "leaderboard": self.leaderboard(),
             "log": self.log[-80:],
