@@ -2,10 +2,11 @@
 
 A local mock of the Sequoia × OpenAI × Citadel Securities **"No Limit"** pokerbot tournament
 ([rules](https://pokerbot.sequoiacap.com/rules.html)): a sit-and-go engine that plays
-**41 poker variants** (No-Limit Hold'em by default), a tournament runner that follows the
+**45 poker variants** (No-Limit Hold'em by default), a tournament runner that follows the
 published scoring rules, a web UI for setting things up and running tournaments, a
 spreadsheet-style **Book** that tracks every run across every variant, and **42 open-source
-bots** ported from MIT Pokerbots and other public projects to practice against.
+bots** ported from MIT Pokerbots and other public projects to practice against, plus
+**SF Contender**, a bot written for the regional's discard-and-reveal variant.
 
 ```bash
 pip install -r requirements.txt
@@ -13,6 +14,8 @@ python server.py                      # UI at http://127.0.0.1:5000
 python run_tournament.py --iterations 200          # or from the command line
 python run_tournament.py --variant plo --iterations 200
 python run_tournament.py --list-variants
+python run_tournament.py --variant sf2026_reveal --history sf_contender   # + hand-history export
+python tools/eval_bot.py sf_contender --baseline fullhouse_template      # paired bot evaluation
 python tests/test_engine.py           # engine tests
 ```
 
@@ -45,7 +48,7 @@ Linux and macOS; on Windows the hard 1 ms cutoff degrades to "soft" (see below).
   50/30/20 for 1st/2nd/3rd. Presets include linear, winner-take-all and a steeper curve, or you
   can type your own.
 - **The poker variant** is revealed on the day, and the Finals use a different one. The engine
-  defaults to No-Limit Hold'em; pick any of the 41 variants below to practice for the unknown.
+  defaults to No-Limit Hold'em; pick any of the 45 variants below to practice for the unknown.
 - **What "iteration" means.** The engine reads it as "seat every bot once", which is consistent
   with the filler-seat rule. Each bot therefore plays one table per iteration.
 - **Callbacks other than `act`** (`new_table`, `new_hand`, `hand_over`) have their own time
@@ -98,6 +101,15 @@ How the rules are implemented:
 - **Mixed games** switch game at each blind level.
 - **MIT legacy variants** follow each year's MIT engine, generalized from heads-up to 8
   players (see the descriptions below).
+- **Discard & Reveal (the SF regional game, as described by its winner):** 3 hole cards;
+  each player still in the hand discards 1 face down, keeps 1 hidden and turns 1 face up for
+  the table. The face-up card still plays in its owner's hand (like a stud up card). All
+  reveals are collected first and then shown together, so no one sees another reveal before
+  choosing. Bots answer `discard(obs)` and then `reveal(obs)` (`obs.reveal_count`); a bot
+  without `reveal()` shows its lowest card. The exact timing wasn't confirmed, so there are
+  four versions: after the flop betting (Crazy Pineapple timing, the best guess), after the
+  preflop betting, after the flop is dealt, and right at the deal. Opponents' face-up cards
+  are in `obs.players[seat].up_cards`.
 
 Bots receive `obs.variant`, `obs.game`, `obs.betting`, `obs.hand_rule`, `obs.split` and all
 their cards in `obs.hole_cards`. Variants with discards or draws call `discard(obs)`, and
@@ -151,6 +163,10 @@ surprise.
 | MIT Pokerbots legacy variants | `mit2024_auction` | 2024 Auction Hold'em | No-limit | Right after the flop everyone in the hand bids for an extra hole card (second-price: the winner pays the second-highest bid into the pot; tied top bids all get a card and pay their bid). |
 | MIT Pokerbots legacy variants | `mit2025_bounty` | 2025 Bounty Hold'em | No-limit | Each bot gets a secret bounty rank every 25 hands. Winning a showdown with that rank in your hand or on the board collects 1.5x from the losers plus a 5-big-blind bonus. |
 | MIT Pokerbots legacy variants | `mit2026_toss` | 2026 Toss Hold'em | No-limit | 3 hole cards. After preflop a 2-card flop is dealt, then everyone discards one card face up onto the board before the flop betting; turn and river follow. |
+| No Limit 2026 regional (discard & reveal) | `sf2026_reveal` | Discard & Reveal (after flop betting) | No-limit | 3 hole cards. At the decision point every player still in the hand discards 1 card face down, keeps 1 hidden and turns 1 face up for the whole table (it still plays in their own hand, like a stud up card). Reveals are simultaneous. Crazy Pineapple timing: you hold all 3 cards through preflop and flop betting; discard + reveal happen after the flop betting round, before the turn. (Best guess at the SF game.) |
+| No Limit 2026 regional (discard & reveal) | `sf2026_reveal_preflop` | Discard & Reveal (after preflop betting) | No-limit | 3 hole cards. At the decision point every player still in the hand discards 1 card face down, keeps 1 hidden and turns 1 face up for the whole table (it still plays in their own hand, like a stud up card). Reveals are simultaneous. Pineapple timing: discard + reveal after the preflop betting round, before the flop. |
+| No Limit 2026 regional (discard & reveal) | `sf2026_reveal_flop` | Discard & Reveal (flop seen, before flop betting) | No-limit | 3 hole cards. At the decision point every player still in the hand discards 1 card face down, keeps 1 hidden and turns 1 face up for the whole table (it still plays in their own hand, like a stud up card). Reveals are simultaneous. Discard + reveal right after the flop is dealt, before the flop betting round. |
+| No Limit 2026 regional (discard & reveal) | `sf2026_reveal_deal` | Discard & Reveal (at the deal) | No-limit | 3 hole cards. At the decision point every player still in the hand discards 1 card face down, keeps 1 hidden and turns 1 face up for the whole table (it still plays in their own hand, like a stud up card). Reveals are simultaneous. Discard + reveal immediately after the deal, before any betting. |
 
 ## The Book
 
@@ -161,7 +177,7 @@ finished tournament is added automatically. Sheets (tabs along the bottom):
 |---|---|
 | **Total** | The combined book: every bot across all variants and tournaments. Elo rating, runs, variants played, titles, podiums, title %, average and best finish, average percentile, normalized score with 95% CI, consistency (std dev), last-5 form and trend, table win %, timeout %, errors, best and worst variant, number of code versions |
 | **Runs** | Every tournament: date, variant, family, betting, field size, rounds and iterations, winner, winner's score, runner-up, margin, duration, points scheme, seed |
-| **Variants** | All 41 variants, including unplayed ones: runs, bots, top-rated bot (variant Elo), most titles, last winner, tables played, rules |
+| **Variants** | All 45 variants, including unplayed ones: runs, bots, top-rated bot (variant Elo), most titles, last winner, tables played, rules |
 | **Matrix** | Bot × variant heatmap of average percentile finish |
 | **Versions** | Every code version of every bot (a hash of the source, frozen each round), marked current or legacy, with each version's record. Shows whether your edits helped |
 | **Entries** | Raw data: one row per bot per run |
@@ -178,6 +194,47 @@ click a cell to see its exact value in the formula bar, move with the arrow keys
 "Export CSV" for the current sheet. Numeric columns are heat-mapped from green (better) to
 red (worse).
 
+## Hand histories
+
+Like the practice-round downloads at the event, the engine can export every hand a chosen bot
+played: pick the bot under **Hand history for bot** in the UI (a download link appears when
+the run finishes) or pass `--history <bot>` on the command line. The file is
+`results/run-…​.history.jsonl`, one JSON object per hand, seen from that bot's seat: its dealt
+cards and discards, everyone's face-up cards, every action `[seat, action, amount_to,
+street]`, the board, showdown hands, winners and chip changes, plus the table's final place
+and points. Up to `--history-tables` tables per round (default 25) are recorded, spread
+across the round.
+
+```python
+import json
+hands = [json.loads(l) for l in open("results/run-20261107-140144-sf2026_reveal.history.jsonl")]
+```
+
+## SF Contender (`bots/sf_contender.py`)
+
+A bot for the discard-and-reveal variant that also plays ordinary Hold'em. It stays inside
+the 1 ms limit by precomputing everything heavy: equities for all 169 two-card and 1,755
+three-card hand classes are embedded in the file (built by `tools/build_sf_tables.py`), and
+the evaluator is a table lookup. On top of that:
+
+- **Preflop:** opens tight by position, push/fold at 12 big blinds or less (tighter on the
+  bubble), and calls all-ins by equity against the shover's estimated range, using ICM once
+  5 or fewer players are left.
+- **Postflop:** a Monte Carlo equity, capped at about 0.35 ms, against every live opponent.
+  Each opponent's hand is sampled from a range set by their actions this hand, their observed
+  raise and shove rates, and how weak the hands they showed down were.
+- **Reading reveals:** an opponent's face-up card fixes one of their two cards. Their hidden
+  card is sampled only from cards that fit their range, and if they usually show their lower
+  card (the default), it is sampled above the face-up card.
+- **Its own reveal** shows whichever card makes its hand look weakest to a bot that averages
+  over the hidden card ("reveal the least information"), with some randomness so the choice
+  isn't a tell. The **discard** keeps the pair of cards with the highest equity.
+- Rarely bluffs. Every decision has a deadline and a safe fallback.
+
+Measured with `tools/eval_bot.py` (paired tables against 7 random opponents from the field,
+`sf2026_reveal`, hard 1 ms limit, 160 tables): 36.4 average points per table (field average
+12.5) and 70.6% first places, versus 17.6 points for the best ported bot in the same seats.
+
 ## Writing a bot
 
 Copy `templates/agent_template.py` into `bots/`. Here is the interface (`engine/api.py` has the
@@ -193,7 +250,7 @@ class Agent:
         # obs.history [(seat, action, amount_to, street)], obs.hands_until_blinds_up, ...
         return ("raise", obs.min_raise_to)   # or 'fold' | 'check' | 'call' | 'all_in'
     # optional: new_table(info), new_hand(obs), hand_over(result)
-    # variants: discard(obs) -> [cards], bid(obs) -> int
+    # variants: discard(obs) -> [cards], reveal(obs) -> [cards], bid(obs) -> int
 ```
 
 Raise amounts are "raise to" totals for the current street. Illegal actions are repaired: an
@@ -281,11 +338,12 @@ Sources: [MIT Pokerbots](https://github.com/mitpokerbots) (MIT license),
 ## Layout
 
 ```
-engine/      evaluator.py  variants.py (41 variants + evaluators)  table.py (sit-and-go for every family)
+engine/      evaluator.py  variants.py (45 variants + evaluators)  table.py (sit-and-go for every family)
              tournament.py (rounds, scoring, multiprocessing)  book.py (analytics)
              sandbox.py (time limits, no network)  scoring.py (points, ICM)  loader.py  api.py
 compat/      framework emulation layers for the ported bots
-bots/        one file per bot (drop yours here, up to 64)
+bots/        one file per bot (drop yours here, up to 64); sf_contender.py is ours
 static/      the web UI
+tools/       build_sf_tables.py (SF Contender's tables)  eval_bot.py (paired bot evaluation)
 server.py    Flask app      run_tournament.py   CLI      tests/   engine tests
 ```

@@ -33,9 +33,16 @@ class Agent:
         return "fold"
 
     def discard(self, obs):
-        # Only called in variants with discards/draws (Pineapple, Irish, draw games, 2026 Toss).
+        # Only called in variants with discards/draws (Pineapple, Irish, draw games, 2026 Toss,
+        # Discard & Reveal).
         # Return a list of your cards (strings) to throw away; obs.discard_count says how many.
         return []
+
+    def reveal(self, obs):
+        # Only called in the Discard & Reveal variants (sf2026_*): which of your remaining hidden
+        # cards to turn face up (obs.reveal_count of them). It still plays in your hand.
+        # Opponents' face-up cards are in obs.players[seat].up_cards.
+        return [min(obs.down_cards, key=lambda c: "23456789TJQKA".index(c[0]))]
 
     def bid(self, obs):
         # Only called in 2024 Auction Hold'em: chips you bid for an extra hole card.

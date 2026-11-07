@@ -5,6 +5,7 @@
     python run_tournament.py --practice            # one unscored round
     python run_tournament.py --variant plo         # any variant (see --list-variants)
     python run_tournament.py --bots mit2023_precompute fullhouse_shark ppe_fish_player
+    python run_tournament.py --variant sf2026_reveal --history sf_contender   # + hand histories
     python run_tournament.py --live 20             # real schedule: rounds 20 minutes apart,
                                                    # bots re-frozen at the start of each round
 """
@@ -39,6 +40,8 @@ def main():
     ap.add_argument("--practice", action="store_true")
     ap.add_argument("--bots", nargs="*", help="bot ids (file names without .py); default all")
     ap.add_argument("--bots-dir", default=os.path.join(ROOT, "bots"))
+    ap.add_argument("--history", default="", help="export hand histories for this bot (id or file name)")
+    ap.add_argument("--history-tables", type=int, default=25, help="max tables of hand history per round")
     a = ap.parse_args()
     if a.list_variants:
         from engine.variants import V
@@ -49,7 +52,8 @@ def main():
     points = POINT_PRESETS.get(a.points) or [float(x) for x in a.points.split(",")]
     cfg = Config(variant=a.variant, betting=a.betting, rounds=a.rounds, iterations=a.iterations, workers=a.workers, seed=a.seed,
                  time_limit_ms=a.time_limit_ms, time_mode=a.time_mode, points=points,
-                 round_interval_minutes=a.live, practice=a.practice).validate()
+                 round_interval_minutes=a.live, practice=a.practice,
+                 history_bot=a.history, history_tables=a.history_tables).validate()
     paths = list_bot_files(a.bots_dir)
     if a.bots:
         want = set(a.bots)
@@ -70,6 +74,8 @@ def main():
 
     res = run_tournament(cfg, paths, progress=progress, wait_cb=wait_cb)
     path = save_results(res, os.path.join(ROOT, "results"))
+    if res.get("history_file"):
+        print(f"hand history: results/{res['history_file']}")
     print()
     hdr = f"{'#':>3}  {'bot':40s} {'weighted':>9}  " + " ".join(f"{'T' + str(r['round']):>6}" for r in res["rounds"])
     print(hdr + f"  {'timeouts':>8} {'errors':>6}")

@@ -309,6 +309,82 @@ def test_book_aggregates_runs_and_versions():
     assert len(book["sheets"][names.index("Variants")]["rows"]) == len(VARIANTS)
 
 
+def test_discard_and_reveal_variants():
+    """Discard 1 face down, reveal 1 face up (still yours), reveals simultaneous, at every timing."""
+    for vid, street_cards in (("sf2026_reveal", 3), ("sf2026_reveal_preflop", 0),
+                              ("sf2026_reveal_flop", 3), ("sf2026_reveal_deal", 0)):
+        cfg = Config(time_mode="off", variant=vid).validate()
+        seen_ups = []
+
+        class Rev:
+            def __init__(self):
+                self.after = []
+
+            def act(self, obs):
+                assert len(obs.hole_cards) in (2, 3)
+                if len(obs.hole_cards) == 2:
+                    assert len(obs.down_cards) == 1 and len(obs.up_cards) == 1
+                    self.after.append(obs)
+                return "call"
+
+            def discard(self, obs):
+                assert obs.phase == "discard" and obs.discard_count == 1 and len(obs.down_cards) == 3
+                return [obs.down_cards[0]]
+
+            def reveal(self, obs):
+                assert obs.phase == "reveal" and obs.reveal_count == 1 and len(obs.down_cards) == 2
+                # simultaneous: nobody's reveal is visible yet when choosing
+                assert not any(p.up_cards for p in obs.players)
+                assert len(obs.board) == street_cards
+                seen_ups.append(obs.down_cards[1])
+                return [obs.down_cards[1]]
+
+        bots = [Rev() for _ in range(8)]
+        slots = [BotSlot(i, f"r{i}", b, BotStats(), True) for i, b in enumerate(bots)]
+        log = []
+        res = Table(slots, cfg, random.Random(11), log=log).play()
+        assert sum(res.final_stacks) == 16000
+        assert seen_ups and "reveals" in "\n".join(log)
+        # after the reveal every player sees everyone's face-up card
+        obs = next(o for b in bots for o in b.after)
+        assert sum(1 for p in obs.players if p.up_cards) >= 2
+
+
+def test_reveal_default_is_lowest_card_and_up_card_plays():
+    from engine.cards import str_to_card as c
+    cfg = Config(time_mode="off", variant="sf2026_reveal_preflop").validate()
+
+    class Quiet:
+        def act(self, obs):
+            return "check" if obs.to_call == 0 else "call"
+
+    # seat order from the button (0): 1, 0 for heads-up deals; give both players 3 cards
+    t = make_table([Quiet(), Quiet()], [1000, 1000],
+                   [c("As"), c("2c"), c("Ad"), c("3c"), c("Kh"), c("7d"),
+                    c("Ac"), c("Ah"), c("9s"), c("4d"), c("5h")], button=0, variant="sf2026_reveal_preflop")
+    play_one(t)
+    for s in t.seats:
+        assert len(s.hole) == 1 and len(s.up) == 1
+        assert (s.up[0] >> 2) <= (s.hole[0] >> 2)  # default reveal = the lower card
+
+
+def test_hand_history_records_my_view():
+    cfg = Config(time_mode="off", variant="sf2026_reveal").validate()
+
+    class Caller:
+        def act(self, obs):
+            return "call"
+
+    slots = [BotSlot(i, f"c{i}", Caller(), BotStats(), True) for i in range(8)]
+    t = Table(slots, cfg, random.Random(5), record_seat=3)
+    t.play()
+    assert t.records
+    h = t.records[0]
+    assert h["my_seat"] == 3 and len(h["my_cards"]) == 3
+    assert {"actions", "board", "showdown", "deltas", "up_cards", "seats"} <= set(h)
+    assert sum(h["deltas"]) == 0
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -71,8 +71,12 @@ class TableResult:
 
 
 class Table:
-    def __init__(self, bots, cfg, rng, log=None):
+    def __init__(self, bots, cfg, rng, log=None, record_seat=None):
         self.cfg = cfg
+        # hand history (like the practice-round downloads): one dict per hand, seen from record_seat
+        self.record_seat = record_seat
+        self.records = [] if record_seat is not None else None
+        self._dealt = {}
         self.rng = rng
         self.n = len(bots)
         self.seats = [Seat(b, cfg.starting_stack) for b in bots]
@@ -95,6 +99,7 @@ class Table:
         self._round = 0
         self._phase = "bet"
         self._discard_count = None
+        self._reveal_count = None
         self._draws_left = 0
         self._bring_in = 0
 
@@ -200,6 +205,7 @@ class Table:
             variant=v.id, variant_name=v.name, game=v.game, betting=self._structure,
             hand_rule=v.hand, split=v.split, deck_ranks=v.ranks, num_hole_cards=len(s.hole) + len(s.up),
             phase=phase, discard_count=self._discard_count if phase == "discard" else None,
+            reveal_count=self._reveal_count if phase == "reveal" else None,
             draws_remaining=self._draws_left, bounty_rank=s.bounty,
             min_bid=0 if phase == "bid" else None, max_bid=s.stack if phase == "bid" else None,
             bet_size=self._fl_size if self._structure == "fixed_limit" else None,
@@ -269,6 +275,7 @@ class Table:
         self._bring_in = 0
         self._round = 0
         self._discard_count = None
+        self._reveal_count = None
         self._draws_left = v.draws
         self._sb_seat = self._bb_seat = None
         for s in self.seats:
@@ -351,6 +358,9 @@ class Table:
         self._fl_level = 0
 
     def _notify_new_hand(self, order):
+        if self.records is not None:
+            self._dealt = {i: _cs(self.seats[i].hole) + _cs(self.seats[i].up) for i in order}
+            self._rec_start = {i: self.seats[i].start_stack for i in range(self.n)}
         for i in order:
             if self.seats[i].bot.agent is not None and hasattr(self.seats[i].bot.agent, "new_hand"):
                 self._call(i, "new_hand", self._obs(i))
@@ -403,6 +413,8 @@ class Table:
                 self.board2.extend(self._deal(v.streets[0]))
         self._log_holdings(order)
         self._notify_new_hand(order)
+        self._discards(0, "post_deal")
+        self._reveals(0, "post_deal")
         done = self._betting_round(self._next_live(bb_seat))
         rounds = list(v.streets[1:])
         rnd = 1
@@ -416,6 +428,7 @@ class Table:
             if len(self._in_hand()) <= 1:
                 break
             self._discards(rnd, "pre")
+            self._reveals(rnd, "pre")
             if "swap" in v.special and rnd in (1, 2):
                 self._swap(0.10 if rnd == 1 else 0.05)
             self._start_round(rnd)
@@ -430,6 +443,7 @@ class Table:
             if "auction" in v.special and rnd == 1:
                 self._auction()
             self._discards(rnd, "post_deal")
+            self._reveals(rnd, "post_deal")
             if not done:  # if everyone is all-in, the board is still run out (and discards made)
                 done = self._betting_round(self._next_live(self.button))
             rnd += 1
@@ -472,6 +486,58 @@ class Table:
                 self._w(f"    {self._name(i)} discards {' '.join(_cs(chosen))}"
                         + (" (face up to the board)" if to_board else ""))
 
+    def _reveals(self, rnd, when):
+        """Discard & Reveal: every live player turns `count` hole cards face up. The choices are
+        collected first and applied together, so nobody sees another player's reveal before choosing."""
+        specs = [c for (r, w, c) in self.v.reveals if r == rnd and w == when]
+        if not specs:
+            return
+        count = specs[0]
+        start = self._next_live(self.button)
+        picks = []
+        for i in self._order_from(start):
+            s = self.seats[i]
+            if not (s.in_hand and not s.folded) or len(s.hole) <= count:
+                continue
+            picks.append((i, self._ask_reveal(i, count)))
+        for i, chosen in picks:
+            s = self.seats[i]
+            for c in chosen:
+                s.hole.remove(c)
+                s.up.append(c)
+            self.history.append((i, "reveal", len(chosen), self._street_value()))
+            self._w(f"    {self._name(i)} reveals {' '.join(_cs(chosen))}")
+
+    def _ask_reveal(self, i, count):
+        s = self.seats[i]
+        self._reveal_count = count
+        raw = self._call(i, "reveal", self._obs(i, phase="reveal"), is_decision=True)
+        self._reveal_count = None
+        chosen = self._parse_cards(s, raw)
+        if len(chosen) != count:
+            if raw not in (None, TIMEOUT, ERROR):
+                s.bot.stats.invalid += 1
+            chosen = sorted(s.hole, key=lambda c: (c >> 2, c & 3))[:count]  # default: lowest card
+        return chosen
+
+    def _parse_cards(self, s, raw):
+        chosen = []
+        if raw in (None, TIMEOUT, ERROR):
+            return chosen
+        try:
+            items = [raw] if isinstance(raw, (str, int)) else list(raw)
+            for it in items:
+                if isinstance(it, int) and not isinstance(it, bool):
+                    c = s.hole[it] if 0 <= it < len(s.hole) else None
+                else:
+                    txt = str(it)
+                    c = next((h for h in s.hole if CARD_STRS[h].lower() == txt.lower()), None)
+                if c is not None and c not in chosen:
+                    chosen.append(c)
+        except Exception:
+            return []
+        return chosen
+
     def _ask_discard(self, i, count, exact):
         """Ask the bot which cards to discard. exact=True: must discard `count` cards
         (default: the lowest ranks); exact=False: 0..count cards (default: stand pat)."""
@@ -495,7 +561,7 @@ class Table:
                 chosen = []
         if exact:
             if len(chosen) != count:
-                if raw not in (TIMEOUT, ERROR):
+                if raw not in (None, TIMEOUT, ERROR):
                     s.bot.stats.invalid += 1
                 chosen = sorted(s.hole, key=lambda c: (c >> 2, c & 3))[:count]
         else:
@@ -943,6 +1009,8 @@ class Table:
         deltas = [seats[i].stack - seats[i].start_stack for i in range(n)]
         stacks = [s.stack for s in seats]
         board = _cs(self.board)
+        if self.records is not None:
+            self._record_hand(shown, winnings, deltas, busted)
         for i in range(n):
             s = seats[i]
             if s.in_hand and s.bot.agent is not None and hasattr(s.bot.agent, "hand_over"):
@@ -953,6 +1021,27 @@ class Table:
                                  eliminated=list(busted), my_seat=i, variant=self.v.id,
                                  bounty_rank=s.bounty)
                 self._call(i, "hand_over", res)
+
+    def _record_hand(self, shown, winnings, deltas, busted):
+        me = self.record_seat
+        seats = self.seats
+        if me is None or me not in self._dealt:
+            return  # the recorded bot was not dealt in (already eliminated)
+        self.records.append({
+            "hand": self.hand_number, "variant": self.v.id, "betting": self._structure,
+            "blinds": [self._sb, self._bb, self._ante], "button": self.button, "my_seat": me,
+            "seats": [{"seat": i, "name": seats[i].bot.name, "stack": self._rec_start.get(i, 0),
+                       "in_hand": i in self._dealt} for i in range(self.n)],
+            "my_cards": self._dealt.get(me, []),
+            "my_discards": _cs(seats[me].discarded),
+            "my_final_cards": _cs(seats[me].hole) + _cs(seats[me].up),
+            "up_cards": {str(i): _cs(seats[i].up) for i in self._dealt if seats[i].up},
+            "actions": [[a[0], a[1], a[2], a[3]] for a in self.history],
+            "board": _cs(self.board), "board2": _cs(self.board2),
+            "showdown": {str(k): list(v) for k, v in shown.items()},
+            "winners": {str(k): winnings[k] for k in range(self.n) if winnings[k]},
+            "deltas": list(deltas), "eliminated": list(busted),
+        })
 
     def _finish(self):
         seats = self.seats

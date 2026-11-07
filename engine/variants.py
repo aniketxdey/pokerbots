@@ -33,6 +33,7 @@ class Variant:
     ranking: str = "standard"          # standard | short_deck | short_deck_trips
     split: str = "high"                # high | hilo8 | low_a5 | low_27 | badugi
     discards: tuple = ()               # ((round, 'pre'|'post_deal', count, to_board), ...)
+    reveals: tuple = ()                # ((round, 'pre'|'post_deal', count), ...) hole -> face up (still yours)
     draws: int = 0                     # draw games: number of draw phases
     stud: tuple = ()                   # stud: per-round deal pattern, e.g. (('d','d','u'), ('u',), ...)
     boards: int = 1                    # 2 = double board (each pot split between boards)
@@ -173,6 +174,25 @@ _add(id="mit2026_toss", name="2026 Toss Hold'em", category=MIT, hole=3, streets=
      discards=((1, "post_deal", 1, True),), legacy="2026",
      description="3 hole cards. After preflop a 2-card flop is dealt, then everyone discards one card face up "
                  "onto the board before the flop betting; turn and river follow.")
+
+# ------------------------------------------------------------------ No Limit 2026 (SF regional)
+SF = "No Limit 2026 regional (discard & reveal)"
+_SF_RULE = ("3 hole cards. At the decision point every player still in the hand discards 1 card face down, "
+            "keeps 1 hidden and turns 1 face up for the whole table (it still plays in their own hand, like a "
+            "stud up card). Reveals are simultaneous. ")
+_add(id="sf2026_reveal", name="Discard & Reveal (after flop betting)", category=SF, hole=3,
+     discards=((2, "pre", 1, False),), reveals=((2, "pre", 1),), legacy="2026",
+     description=_SF_RULE + "Crazy Pineapple timing: you hold all 3 cards through preflop and flop betting; "
+                 "discard + reveal happen after the flop betting round, before the turn. (Best guess at the SF game.)")
+_add(id="sf2026_reveal_preflop", name="Discard & Reveal (after preflop betting)", category=SF, hole=3,
+     discards=((1, "pre", 1, False),), reveals=((1, "pre", 1),), legacy="2026",
+     description=_SF_RULE + "Pineapple timing: discard + reveal after the preflop betting round, before the flop.")
+_add(id="sf2026_reveal_flop", name="Discard & Reveal (flop seen, before flop betting)", category=SF, hole=3,
+     discards=((1, "post_deal", 1, False),), reveals=((1, "post_deal", 1),), legacy="2026",
+     description=_SF_RULE + "Discard + reveal right after the flop is dealt, before the flop betting round.")
+_add(id="sf2026_reveal_deal", name="Discard & Reveal (at the deal)", category=SF, hole=3,
+     discards=((0, "post_deal", 1, False),), reveals=((0, "post_deal", 1),), legacy="2026",
+     description=_SF_RULE + "Discard + reveal immediately after the deal, before any betting.")
 
 VARIANTS = {v.id: v for v in V}
 DEFAULT_VARIANT = "nlhe"

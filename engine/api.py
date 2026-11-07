@@ -16,6 +16,8 @@ A bot is one Python file in bots/ that defines a class named ``Agent``:
                                             #    draw games, 2026 Toss). obs.discard_count = how many
                                             #    (draw games: up to that many; 'stand pat' = [])
         def bid(self, obs): ...             # -> int chips (2024 Auction Hold'em), 0..obs.max_bid
+        def reveal(self, obs): ...          # -> list of cards to turn face up (Discard & Reveal);
+                                            #    obs.reveal_count = how many (default: your lowest card)
 
 Return value of act() can be any of:
     'fold' | 'check' | 'call' | 'all_in'
@@ -95,7 +97,7 @@ class Observation:
         "ante", "bring_in", "button", "small_blind_seat", "big_blind_seat", "num_players",
         "num_active", "players", "players_up_cards", "history", "starting_stack",
         "hands_until_blinds_up", "max_hands", "time_limit_ms", "variant", "variant_name", "game",
-        "betting", "hand_rule", "split", "deck_ranks", "num_hole_cards", "phase", "discard_count",
+        "betting", "hand_rule", "split", "deck_ranks", "num_hole_cards", "phase", "discard_count", "reveal_count",
         "draws_remaining", "bounty_rank", "min_bid", "max_bid", "bet_size",
     )
 
@@ -171,7 +173,7 @@ class HandResult:
 #   deck_ranks               ranks in the deck, e.g. '6789TJQKA' for Short Deck
 #   hole_cards               ALL your private cards (stud: down + up); down_cards / up_cards
 #   players[i].up_cards      opponents' face-up stud cards;  board2: second board (double board)
-#   phase                    'bet' | 'discard' | 'bid';  draws_remaining;  bounty_rank (2025)
+#   phase                    'bet' | 'discard' | 'bid' | 'reveal';  reveal_count;  draws_remaining;  bounty_rank (2025)
 #   round_index              betting round number within the hand
 
 # HandResult fields:

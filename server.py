@@ -153,7 +153,8 @@ def _runner(cfg, paths):
                              wait_cb=wait_cb)
         path = save_results(res, RESULTS_DIR)
         _set(phase="stopped" if _stop.is_set() else "done", leaderboard=res["leaderboard"],
-             rounds=res["rounds"], result_file=os.path.basename(path), finished=time.time())
+             rounds=res["rounds"], result_file=os.path.basename(path), finished=time.time(),
+             history_file=res.get("history_file"))
     except Exception as e:
         _set(phase="error", error=f"{e}\n{traceback.format_exc(limit=4)}")
 
@@ -220,6 +221,15 @@ def runs():
         if fn.endswith(".json"):
             out.append(fn)
     return jsonify(out)
+
+
+@app.get("/api/history/<name>")
+def get_history(name):
+    """Download a hand-history file (JSON Lines, one hand per line)."""
+    name = os.path.basename(name)
+    if not name.endswith(".history.jsonl") or not os.path.isfile(os.path.join(RESULTS_DIR, name)):
+        abort(404)
+    return send_from_directory(RESULTS_DIR, name, as_attachment=True, mimetype="application/x-ndjson")
 
 
 @app.get("/api/runs/<name>")

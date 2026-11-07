@@ -55,6 +55,8 @@ class Config:
     round_interval_minutes: float = 0.0  # >0 = live mode: wait between rounds, re-freeze bots
     practice: bool = False           # practice round: 1 round, unscored
     sample_log_hands: int = 200      # hands of the first table to keep as a readable log
+    history_bot: str = ""            # bot id / name / file whose hand histories are exported ("" = off)
+    history_tables: int = 25         # max tables of hand history per round
 
     @classmethod
     def from_dict(cls, d):
@@ -91,6 +93,8 @@ class Config:
         self.callback_time_limit_ms = float(self.callback_time_limit_ms)
         if self.time_mode not in ("hard", "soft", "off"):
             self.time_mode = "hard"
+        self.history_bot = str(self.history_bot or "").strip()
+        self.history_tables = max(0, int(self.history_tables))
         self.workers = int(self.workers)
         self.seed = int(self.seed)
         if self.practice:
@@ -160,7 +164,8 @@ def _make_agent(bot, stats, cfg):
 
 def _run_chunk(task):
     """Run a block of iterations. Returns aggregated per-bot results."""
-    round_idx, it_start, it_end, seed, want_log = task
+    round_idx, it_start, it_end, seed, want_log = task[:5]
+    hist_quota = task[5] if len(task) > 5 else 0
     cfg = _W["cfg"]
     bots = _W["bots"]
     nb = len(bots)
@@ -169,6 +174,8 @@ def _run_chunk(task):
             "hands": 0, "chips_end": 0, "stats": BotStats()} for _ in range(nb)]
     log = None
     tables_played = 0
+    hist = []
+    focus = _focus_index(bots, cfg.history_bot) if hist_quota else None
     for it in range(it_start, it_end):
         rng = random.Random(f"{seed}-{round_idx}-{it}")
         order = list(range(nb))
@@ -198,13 +205,20 @@ def _run_chunk(task):
                     timed_call(sl.agent.new_table, (info,), cfg.callback_time_limit_ms / 1000.0,
                                cfg.time_mode, sl.stats, False)
             tl = [] if (want_log and log is None) else None
-            table = Table(slots, cfg, rng, log=tl)
+            rec_seat = None
+            if focus is not None and len(hist) < hist_quota and focus in members:
+                rec_seat = next(k for k, sl in enumerate(slots) if sl.idx == focus and sl.scoring)
+            table = Table(slots, cfg, rng, log=tl, record_seat=rec_seat)
             if tl is not None:
                 tl.append("Seats: " + ", ".join(f"S{i}={s.name}" for i, s in enumerate(slots)))
             res = table.play()
             tables_played += 1
             if tl is not None:
                 log = _trim_log(tl, cfg.sample_log_hands)
+            if rec_seat is not None:
+                hist.append({"round": round_idx + 1, "table": len(hist) + 1, "iteration": it + 1,
+                             "bot": bots[focus]["name"], "place": res.places[rec_seat] or ts,
+                             "points": res.points[rec_seat], "hands": table.records})
             for seat, sl in enumerate(slots):
                 if not sl.scoring:
                     continue
@@ -225,7 +239,20 @@ def _run_chunk(task):
                 a["chips_end"] += res.final_stacks[seat]
     for a in agg:
         a["stats"] = a["stats"].to_dict()
-    return {"agg": agg, "log": log, "iterations": it_end - it_start, "tables": tables_played}
+    return {"agg": agg, "log": log, "iterations": it_end - it_start, "tables": tables_played,
+            "history": hist}
+
+
+def _focus_index(bots, key):
+    key = (key or "").strip().lower()
+    if not key:
+        return None
+    for i, b in enumerate(bots):
+        names = {b["id"].lower(), b["name"].lower(), os.path.basename(b["path"]).lower(),
+                 os.path.splitext(os.path.basename(b["path"]))[0].lower()}
+        if key in names:
+            return i
+    return None
 
 
 def _trim_log(lines, max_hands):
@@ -261,11 +288,15 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
     bounds = [round(cfg.iterations * k / n_chunks) for k in range(n_chunks + 1)]
     tasks = [(round_idx, bounds[k], bounds[k + 1], seed, k == 0)
              for k in range(n_chunks) if bounds[k + 1] > bounds[k]]
+    if cfg.history_bot and cfg.history_tables:
+        q = -(-cfg.history_tables // len(tasks))  # spread the recorded tables across the round
+        tasks = [t + (q,) for t in tasks]
     total = {"tables": [0] * nb, "points": [0.0] * nb, "place_sum": [0.0] * nb,
              "wins": [0] * nb, "top3": [0] * nb, "busts": [0] * nb, "hands": [0] * nb,
              "chips_end": [0] * nb}
     stats = [BotStats() for _ in range(nb)]
     log = None
+    history = []
     done = 0
     n_tables = 0
     t0 = time.time()
@@ -282,6 +313,8 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
                 stats[i].merge(BotStats.from_dict(a["stats"]))
             if res["log"] is not None:
                 log = res["log"]
+            if res.get("history"):
+                history.extend(res["history"][:max(0, cfg.history_tables - len(history))])
             done += res["iterations"]
             n_tables += res["tables"]
             if progress:
@@ -297,9 +330,12 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
             pool.close()
         pool.join()
     summary = _round_summary(snap, total, stats, cfg)
+    history.sort(key=lambda h: h["iteration"])
+    for k, h in enumerate(history):
+        h["table"] = k + 1
     return {"round": round_idx + 1, "iterations_done": done, "tables": n_tables,
             "seconds": time.time() - t0, "bots": summary, "sample_log": log or [],
-            "stopped": stopped}
+            "stopped": stopped, "hand_history": history}
 
 
 def _round_summary(snap, total, stats, cfg):
@@ -364,6 +400,7 @@ def run_tournament(cfg, bot_paths, progress=None, stop=None, on_round=None, wait
     seed = cfg.seed or random.randrange(1, 2 ** 31)
     started = time.time()
     rounds = []
+    histories = []
     for r in range(cfg.rounds):
         if r > 0 and cfg.round_interval_minutes > 0:
             target = started + r * cfg.round_interval_minutes * 60
@@ -379,6 +416,8 @@ def run_tournament(cfg, bot_paths, progress=None, stop=None, on_round=None, wait
         if len(snap) < 2:
             raise ValueError("need at least 2 valid bots")
         res = run_round(cfg, snap, r, seed, progress=progress, stop=stop)
+        histories.extend(res.pop("hand_history", []))
+        res["history_tables"] = sum(1 for h in histories if h["round"] == r + 1)
         res["weight"] = cfg.round_weights[r]
         rounds.append(res)
         if on_round:
@@ -397,7 +436,7 @@ def run_tournament(cfg, bot_paths, progress=None, stop=None, on_round=None, wait
             "variant": v.id, "variant_name": v.name, "variant_category": v.category,
             "betting": cfg.betting or v.betting,
             "rounds": rounds, "leaderboard": combine(rounds, cfg),
-            "bot_versions": versions, "schema": 2,
+            "bot_versions": versions, "schema": 2, "_hand_history": histories,
             "bots": [os.path.basename(p) for p in bot_paths]}
 
 
@@ -410,6 +449,21 @@ def save_results(results, results_dir):
     while os.path.exists(path):
         path = os.path.join(results_dir, f"run-{stamp}-{tag}-{k}.json")
         k += 1
+    hist = results.pop("_hand_history", None)
+    if hist:
+        hpath = path[:-5] + ".history.jsonl"
+        write_history(hist, hpath)
+        results["history_file"] = os.path.basename(hpath)
     with open(path, "w") as f:
         json.dump(results, f, indent=1)
+    return path
+
+
+def write_history(tables, path):
+    """One JSON object per hand (JSON Lines), table info merged in, like a practice-round download."""
+    with open(path, "w") as f:
+        for t in tables:
+            meta = {k: t[k] for k in ("round", "table", "iteration", "bot", "place", "points")}
+            for h in t["hands"]:
+                f.write(json.dumps(dict(meta, **h)) + "\n")
     return path

@@ -145,6 +145,12 @@
         <div><label>Live gap (min)</label><input type="number" id="round_interval_minutes" step="1">
           <div class="hint">20 = real schedule</div></div>
       </div>
+      <div class="row3">
+        <div style="grid-column: span 2"><label>Hand history for bot</label>
+          <select id="history_bot"><option value="">— off —</option></select>
+          <div class="hint">Exports that bot's hands (JSON Lines), like the practice-round download.</div></div>
+        <div><label>Tables / round</label><input type="number" id="history_tables" min="1"></div>
+      </div>
       <label class="flex" style="color:var(--ink);margin-top:10px"><input type="checkbox" id="practice"> Practice round (1 unscored round)</label>
       <div class="btns">
         <button class="primary" id="runBtn">Run tournament</button>
@@ -209,7 +215,7 @@ const $ = id => document.getElementById(id);
 let DEFAULTS = null, PRESETS = {}, BOTS = [], selected = new Set(), polling = null;
 let viewRounds = [], viewRound = null, viewingPast = null, sortKey = 'rank', sortDir = 1, roundSort = ['avg_points', -1];
 const FIELDS = ['variant','betting','rounds','iterations','table_size','starting_stack','blind_interval','max_hands','time_limit_ms',
-                'callback_time_limit_ms','time_mode','workers','seed','round_interval_minutes'];
+                'callback_time_limit_ms','time_mode','workers','seed','round_interval_minutes','history_tables'];
 const STRING_FIELDS = ['variant','betting','time_mode'];
 let VARIANTS = [], VMAP = {};
 
@@ -226,6 +232,7 @@ function setConfig(c) {
   $('blind_schedule').value = c.blind_schedule.map(l => l.join('/')).join('\n');
   $('points').value = c.points.map(x => +x).join(', ');
   $('practice').checked = !!c.practice;
+  if (c.history_bot !== undefined) { fillHistorySelect(); $('history_bot').value = c.history_bot; }
   syncPreset();
 }
 function getConfig() {
@@ -235,6 +242,7 @@ function getConfig() {
   c.blind_schedule = $('blind_schedule').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => l.split(/[\/ ,]+/).map(Number));
   c.points = $('points').value.split(/[ ,]+/).filter(Boolean).map(Number);
   c.practice = $('practice').checked;
+  c.history_bot = $('history_bot').value;
   return c;
 }
 function syncPreset() {
@@ -268,7 +276,7 @@ function renderVariantBox() {
   if (v.boards === 2) tags.push('two boards');
   if (v.legacy) tags.push('MIT ' + v.legacy);
   $('variantBox').innerHTML = `${esc(v.description)}<div class="tags">${tags.map(t => `<span class="pill">${esc(t)}</span>`).join('')}</div>` +
-    (v.id !== 'nlhe' ? `<div class="hint" style="margin-top:4px">Bots get <code>obs.variant</code>, <code>obs.hole_cards</code> (any count) and, where needed, <code>discard(obs)</code> / <code>bid(obs)</code> callbacks.</div>` : '');
+    (v.id !== 'nlhe' ? `<div class="hint" style="margin-top:4px">Bots get <code>obs.variant</code>, <code>obs.hole_cards</code> (any count) and, where needed, <code>discard(obs)</code> / <code>bid(obs)</code> / <code>reveal(obs)</code> callbacks.</div>` : '');
 }
 
 async function loadDefaults() {
@@ -289,7 +297,14 @@ async function loadBots() {
   if (selected.size === 0) BOTS.forEach(b => { if (b.valid && (!sel || sel.includes(b.id))) selected.add(b.id); });
   renderBots();
 }
+function fillHistorySelect() {
+  const sel = $('history_bot'), cur = sel.value;
+  sel.innerHTML = '<option value="">— off —</option>' +
+    BOTS.filter(b => b.valid).map(b => `<option value="${esc(b.id)}">${esc(b.name || b.id)}</option>`).join('');
+  sel.value = BOTS.some(b => b.id === cur) ? cur : '';
+}
 function renderBots() {
+  fillHistorySelect();
   const tb = $('botsTable').querySelector('tbody');
   tb.innerHTML = BOTS.map(b => `<tr>
     <td><input type="checkbox" data-id="${b.id}" ${selected.has(b.id) ? 'checked' : ''} ${b.valid ? '' : 'disabled'}></td>
@@ -349,6 +364,10 @@ function renderStatus(s) {
   $('statusLine').textContent = `${phase} · ${vname} · round ${s.round || '-'} of ${R} · iteration ${s.done ?? 0} / ${s.total ?? '-'}`;
   $('statusLine2').textContent = (s.phase === 'running' ? `round elapsed ${dur(s.elapsed)} · round ETA ${dur(s.eta)}` : '') +
     (s.result_file ? `saved results/${s.result_file}` : '');
+  if (s.history_file) {
+    $('statusLine2').innerHTML = esc($('statusLine2').textContent) +
+      ` · <a href="/api/history/${encodeURIComponent(s.history_file)}" download>download hand history</a>`;
+  }
 }
 
 const BOARD_COLS = [['rank','#'],['name','Bot'],['weighted','Weighted'],['weighted_avg','Avg pts']];
