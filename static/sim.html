@@ -61,7 +61,6 @@
 <body>
 <header>
   <h1>♠ No Limit practice event</h1>
-  <a href="/">tournament engine</a>
   <div class="spend" title="Model spend for the AI rivals (estimated from token usage and the model's price)">
     AI rival spend<br><b id="spendGame">$0.00</b> this game<br><span id="spendAll">$0.00 all time</span>
   </div>
@@ -184,7 +183,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const mmss = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s/60); return m + ':' + String(s%60).padStart(2,'0'); };
 const money = x => '$' + (x < 10 ? x.toFixed(x < 1 ? 3 : 2) : x.toFixed(2));
-let D = null, lastDl = '';
+let D = null, lastDl = '', wantForm = false;
 
 async function init() {
   D = await (await fetch('/api/sim/defaults')).json();
@@ -209,10 +208,10 @@ $('startBtn').onclick = async () => {
     concurrency: +$('concurrency').value, speed: +$('speed').value, workers: +$('workers').value };
   $('startBtn').disabled = true;
   await fetch('/api/sim/new', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  $('startBtn').disabled = false; poll();
+  $('startBtn').disabled = false; wantForm = false; lastDl = ''; poll();
 };
 $('stopBtn').onclick = async () => { if (confirm('Stop this event? The AI rivals stop too.')) await fetch('/api/sim/stop', {method:'POST'}); };
-$('newBtn').onclick = () => { $('newCard').classList.remove('hidden'); window.scrollTo(0,0); };
+$('newBtn').onclick = () => { wantForm = true; $('newCard').classList.remove('hidden'); window.scrollTo(0,0); };
 
 async function sendBot(url) {
   const f = $('botFile').files[0];
@@ -241,15 +240,18 @@ async function poll() {
   const s = await (await fetch('/api/sim/state')).json();
   $('spendGame').textContent = money(s.spend.game);
   $('spendAll').textContent = money(s.spend.all_time) + ' all time';
+  // the setup form shows when there is no event, after one ends, or when "New event" was clicked
+  const showForm = !s.id || s.finished || wantForm;
+  $('newCard').classList.toggle('hidden', !showForm);
   if (!s.id) { $('live').classList.add('hidden'); renderRules(null); return; }
-  renderRules(s);
+  renderRules(showForm ? null : s);
   $('live').classList.remove('hidden');
-  if (!document.activeElement || !$('newCard').contains(document.activeElement)) $('newCard').classList.add('hidden');
+  $('stopBtn').classList.toggle('hidden', !!s.finished);
   // clock
   if (s.finished) { $('phaseLbl').textContent = 'Event over'; $('mainClock').textContent = 'Done'; }
   else if (s.phase === 'build') { $('phaseLbl').textContent = 'Build phase — time left'; $('mainClock').textContent = mmss(s.build_left); }
   else { $('phaseLbl').textContent = 'Scored rounds — event time'; $('mainClock').textContent = mmss(s.event_time); }
-  $('nextLbl').textContent = s.next_event ? `${s.next_event.label} in ${mmss(s.next_event.in)}` : '—';
+  $('nextLbl').textContent = (!s.finished && s.next_event) ? `${s.next_event.label} in ${mmss(s.next_event.in)}` : '—';
   const cr = s.current_round;
   $('runningLbl').innerHTML = cr ? `${esc(cr.label)}: ${cr.done.toLocaleString()} / ${cr.total.toLocaleString()} tables`
     + (cr.eta_s != null ? `<div class="hint">${cr.tables_per_s} tables/s · about ${mmss(cr.eta_s)} real time left</div>` : '') : '—';

@@ -44,7 +44,7 @@ def _set(**kw):
 
 @app.get("/")
 def index():
-    return send_from_directory(os.path.join(ROOT, "static"), "index.html")
+    return send_from_directory(os.path.join(ROOT, "static"), "sim.html")
 
 
 @app.get("/api/defaults")

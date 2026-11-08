@@ -3,14 +3,14 @@
 A local mock of the Sequoia × OpenAI × Citadel Securities **"No Limit"** pokerbot tournament
 ([rules](https://pokerbot.sequoiacap.com/rules.html)): a sit-and-go engine that plays
 **45 poker variants** (No-Limit Hold'em by default), a tournament runner that follows the
-published scoring rules, a web UI for setting things up and running tournaments, a
-spreadsheet-style **Book** that tracks every run across every variant, and **42 open-source
+published scoring rules, a **practice-event simulator** web UI (see below), a **Book** that
+tracks every run across every variant, and **42 open-source
 bots** ported from MIT Pokerbots and other public projects to practice against, plus
 **SF Contender**, a bot written for the regional's discard-and-reveal variant.
 
 ```bash
 pip install -r requirements.txt
-python server.py                      # UI at http://127.0.0.1:5000
+python server.py --port 5055          # practice-event UI at http://127.0.0.1:5055
 python run_tournament.py --iterations 200          # or from the command line
 python run_tournament.py --variant plo --iterations 200
 python run_tournament.py --list-variants
@@ -69,22 +69,15 @@ of CPU-hours. For iterating on a bot, **100–500 iterations** per round already
 clearly. With the 50/30/20 points the standard error of a bot's average is roughly
 20/√iterations points.
 
-## The UI
+## Running tournaments
 
-- **Settings:** every rule above, plus an "Official rules" reset, workers, seed, live-mode gap
-  and practice mode.
-- **Bots:** pick any subset (up to 64), upload new `.py` files, and see each bot's source link.
-- **Status:** a live progress bar with ETA, plus a picker for past runs (saved to `results/*.json`).
-- **Leaderboard:** sortable, with weighted score, per-round averages, win rate, timeout rate and
-  errors.
-- **Book:** a spreadsheet of every run (see below).
-- **Round details:** average points and place, win and top-3 rate, hands survived, decision
-  times (average and max), timeouts, crashes (with the first error message) and repaired illegal
-  actions. Each round also includes a full hand log of one sample table.
+Full tournaments over any set of bots run from the command line (`run_tournament.py`, see
+the quick start above); results are saved to `results/*.json` and feed the Book. The web
+UI is the practice-event simulator described below.
 
 ## Variants
 
-Pick a variant in the UI (grouped by family, with its rules shown underneath) or with
+Pick a variant with
 `--variant`. Betting can be overridden: no-limit, pot-limit or fixed-limit. All tournament
 rules stay the same: 2,000 chips, the blind schedule, the hand cap, ICM and points.
 
@@ -117,7 +110,7 @@ Auction Hold'em calls `bid(obs)`. A bot without `discard` throws its lowest card
 discards and stands pat in draw games. A bot without `bid` bids 0. The MIT ports answer
 these through their own `DiscardAction` / `BidAction` code, and the 2025 bounty bots read
 their real bounty rank. Bots written only for Hold'em will often error or fold in other
-games, and the UI shows that. Testing that is useful, because the real variant is a
+games, and the results show that. Testing that is useful, because the real variant is a
 surprise.
 
 | Family | id | Variant | Default betting | Rules |
@@ -170,7 +163,7 @@ surprise.
 
 ## The Book
 
-The **Book** tab is a spreadsheet built from every saved run (`results/*.json`). Every
+The **Book** (`engine/book.py`, served as JSON at `/api/book`) is built from every saved run (`results/*.json`). Every
 finished tournament is added automatically. Sheets (tabs along the bottom):
 
 | Sheet | What it tracks |
@@ -200,7 +193,7 @@ A full rehearsal of the regional: your team against up to 7 **AI rival teams** t
 improve their own bots during the event, the way real teams do with a coding assistant.
 
 ```bash
-python server.py        # then open http://127.0.0.1:5000/sim
+python server.py --port 5055     # then open http://127.0.0.1:5055 (macOS uses port 5000 for AirPlay)
 ```
 
 **Event format (same as the real one):** a 60-minute build phase with an unscored practice
@@ -253,8 +246,8 @@ tables in a round's 20 minutes, lower "Tables per scored round". Event data is s
 ## Hand histories
 
 Like the practice-round downloads at the event, the engine can export every hand a chosen bot
-played: pick the bot under **Hand history for bot** in the UI (a download link appears when
-the run finishes) or pass `--history <bot>` on the command line. The file is
+played: pass `--history <bot>` on the command line. (The practice-event simulator gives every
+team its own hand history after each round.) The file is
 `results/run-…​.history.jsonl`, one JSON object per hand, seen from that bot's seat: its dealt
 cards and discards, everyone's face-up cards, every action `[seat, action, amount_to,
 street]`, the board, showdown hands, winners and chip changes, plus the table's final place
@@ -399,7 +392,7 @@ engine/      evaluator.py  variants.py (45 variants + evaluators)  table.py (sit
              sandbox.py (time limits, no network)  scoring.py (points, ICM)  loader.py  api.py
 compat/      framework emulation layers for the ported bots
 bots/        one file per bot (drop yours here, up to 64); sf_contender.py is ours
-static/      the web UI
+static/      sim.html, the practice-event web UI
 sim/         practice-event simulator: game.py (schedule, submissions, rounds), agent.py (AI rivals),
              llm.py (Ollama/OpenAI-compatible client), web.py (routes), localtest.py; UI in static/sim.html
 tools/       build_sf_tables.py (SF Contender's tables)  eval_bot.py (paired bot evaluation)
