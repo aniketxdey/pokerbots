@@ -354,6 +354,40 @@ class Game:
     def team(self, tid):
         return next((t for t in self.teams if t.id == tid), None)
 
+    def add_human(self, name=None):
+        """Another bot of yours: its own entrant with its own uploads, active version and results, so
+        several strategies can be compared in the same rounds. It forfeits until an upload passes."""
+        with self.lock:
+            if self.finished:
+                return {"ok": False, "problem": "the event is over"}
+            mine = [t for t in self.teams if t.kind == "human"]
+            k = len(mine) + 1
+            while self.team(f"you{k}") is not None:
+                k += 1
+            base = mine[0].name if mine else "Your team"
+            t = Team(f"you{k}", (name or "").strip()[:40] or f"{base} #{k}", "human")
+            self._init_workspace(t)
+            self.teams.append(t)
+            self._save()
+        self._log(f"Added your bot '{t.name}' (no active bot until an upload passes)")
+        return {"ok": True, "team": t.id, "name": t.name}
+
+    def fast_forward(self):
+        """Jump the event clock to the next scheduled snapshot, which then happens at once."""
+        if self.finished or self.started_real is None:
+            return {"ok": False, "problem": "no live event"}
+        e = self.next_event()
+        if e is None:
+            return {"ok": False, "problem": "no more rounds to snapshot"}
+        if any(t.kind == "ai" and t.active is None for t in self.teams):
+            self._rescue_ai_teams()   # the usual safety net that runs 45 s before a freeze
+        with self.lock:
+            t = self.event_time()
+            gap = max(0.0, e["at"] - t)
+            self.started_real -= gap / self.speed
+        self._log(f"Fast-forwarded {gap / 60:.1f} event minutes to {self._label(e)}")
+        return {"ok": True, "to": self._label(e), "skipped_s": round(gap)}
+
     # ------------------------------------------------------------------ main loop
     def start(self):
         self.started_real = _now()
@@ -522,7 +556,7 @@ class Game:
         mode = self.settings.get("full_history", "you")
         if mode == "off":
             return []
-        return [t.id for t in self.teams if t.kind in WORKING_KINDS and (mode == "all" or t.id == HUMAN_ID)]
+        return [t.id for t in self.teams if t.kind in WORKING_KINDS and (mode == "all" or t.kind == "human")]
 
     def _merge_full_history(self, e, team, dest, folder="full_history"):
         """Concatenate the per-worker gzip files (gzip members concatenate into one valid file)."""

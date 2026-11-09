@@ -65,6 +65,7 @@
 <body>
 <header>
   <h1>♠ No Limit practice event</h1>
+  <button class="hidden" id="ffBtn" title="Jump the event clock to the next snapshot (use when every bot is uploaded and the agents are done)">⏩ Next round</button>
   <button class="danger hidden" id="resetBtn" title="Stop the round, all AI rivals and their scripts, and go back to setup">■ Reset</button>
   <div class="spend" title="Model spend for the AI rivals (estimated from token usage and the model's price)">
     AI rival spend<br><b id="spendGame">$0.00</b> this game<br><span id="spendAll">$0.00 all time</span>
@@ -180,7 +181,7 @@
 <div class="grid">
 <div>
   <section class="card">
-    <h2>Your submission</h2>
+    <h2>Your submission <span id="myBotLbl" class="muted" style="text-transform:none"></span></h2>
     <div id="cooldown" class="hint"></div>
     <label>agent.py, or a .zip with agent.py at its root (≤ 50 MB)</label>
     <input type="file" id="botFile" accept=".py,.zip">
@@ -193,6 +194,11 @@
     </div>
     <div id="submitMsg" class="hint" style="font-size:13px"></div>
     <table style="margin-top:8px"><thead><tr><th>#</th><th>Event time</th><th>Size</th><th>Status</th><th></th></tr></thead><tbody id="subs"></tbody></table>
+    <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <label style="margin-top:0">Your bots <span class="hint">(each is its own entrant with its own uploads and results, to A/B test strategies in the same rounds)</span></label>
+      <div class="btns" id="myBots" style="margin-top:4px"></div>
+      <div class="btns" style="margin-top:6px"><input id="newBotName" placeholder="name (optional)" style="max-width:220px"> <button id="addBotBtn">＋ Add bot</button></div>
+    </div>
   </section>
   <section class="card">
     <h2>Your downloads</h2>
@@ -362,8 +368,24 @@ async function sendBot(url) {
   if (f) { const fd = new FormData(); fd.append('file', f); opts = {method:'POST', body: fd}; }
   else if ($('botSrc').value.trim()) opts = {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({source: $('botSrc').value})};
   else { $('submitMsg').innerHTML = '<span class="bad">Choose a file or paste code first.</span>'; return null; }
-  return await (await fetch(url, opts)).json();
+  return await (await fetch(url + (url.includes('localtest') ? '' : '?team=' + encodeURIComponent(myId)), opts)).json();
 }
+let myId = 'you';
+function pickBot(id) { myId = id; $('submitMsg').textContent = ''; lastDl = ''; poll(); }
+$('addBotBtn').onclick = async () => {
+  const r = await (await fetch('/api/sim/add_bot', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name: $('newBotName').value})})).json();
+  if (!r.ok) { alert(r.problem); return; }
+  $('newBotName').value = ''; pickBot(r.team);
+};
+$('ffBtn').onclick = async () => {
+  if (!confirm('Jump the clock to the next snapshot now? Every bot\'s active version is frozen immediately.')) return;
+  $('ffBtn').disabled = true;
+  const r = await (await fetch('/api/sim/fast_forward', {method:'POST'})).json();
+  $('ffBtn').disabled = false;
+  if (!r.ok) alert(r.problem);
+  poll();
+};
 $('submitBtn').onclick = async () => {
   $('submitMsg').textContent = 'Uploading and running the test match…';
   const r = await sendBot('/api/sim/submit'); if (!r) return;
@@ -373,10 +395,10 @@ $('submitBtn').onclick = async () => {
 $('dlBtn').onclick = () => { if ($('dlRound').value) sampleDl($('dlRound').value); };
 function sampleDl(tag) {
   const pct = Math.min(100, Math.max(1, +$('dlPct').value || 20));
-  window.location = `/api/sim/download_sample/${encodeURIComponent(tag)}?pct=${pct}`;
+  window.location = `/api/sim/download_sample/${encodeURIComponent(tag)}?pct=${pct}&team=${encodeURIComponent(myId)}`;
 }
 async function makeActive(n) {
-  const r = await (await fetch('/api/sim/activate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({version: n})})).json();
+  const r = await (await fetch('/api/sim/activate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({version: n, team: myId})})).json();
   $('submitMsg').innerHTML = r.ok ? `<span class="ok">v${r.version} is now active (from the next round).</span>` : `<span class="bad">${esc(r.problem)}</span>`;
   poll();
 }
@@ -402,6 +424,9 @@ async function poll() {
   // the setup form shows when there is no event, after one ends, or when "New event" was clicked
   const showForm = !s.id || s.finished || wantForm;
   $('resetBtn').classList.toggle('hidden', !s.id);
+  const nx = (s.schedule || []).find(e => !e.done && !e.running && !e.started && e.at > s.event_time);
+  $('ffBtn').classList.toggle('hidden', !(s.id && !s.finished && nx));
+  if (nx) $('ffBtn').textContent = `⏩ ${nx.kind === 'practice' ? 'Practice ' + nx.n : 'Scored round ' + nx.n} now`;
   creditAlert(s.id ? s : {agents: []});
   $('newCard').classList.toggle('hidden', !showForm);
   $('pilotCard').classList.toggle('hidden', !showForm);
@@ -421,7 +446,12 @@ async function poll() {
   $('timeline').innerHTML = s.schedule.map(e => `<span class="slot ${e.kind} ${e.done ? 'done' : ''} ${e.running ? 'running' : ''}">`
     + `${e.kind === 'practice' ? 'P' + e.n : 'R' + e.n} · ${mmss(e.at)}</span>`).join('');
   // my submissions
-  const me = s.teams.find(t => t.id === 'you');
+  const mine = s.teams.filter(t => t.kind === 'human');
+  if (!mine.some(t => t.id === myId)) myId = 'you';
+  const me = mine.find(t => t.id === myId) || mine[0];
+  $('myBotLbl').textContent = mine.length > 1 ? '· ' + me.name : '';
+  $('myBots').innerHTML = mine.map(t => `<button class="${t.id === myId ? 'primary' : ''}" onclick="pickBot('${t.id}')">${esc(t.name)}`
+    + ` <span class="hint" style="color:inherit;opacity:.8">${t.active ? 'v' + t.active : 'no bot'}</span></button>`).join('');
   $('cooldown').innerHTML = (me.cooldown_s > 0 ? `<span class="warn">Next upload allowed in ${Math.ceil(me.cooldown_s)} s (event time)</span>` : '<span class="ok">You can upload now.</span>')
     + (me.active ? ` · active bot: <b>v${me.active}</b>` : ' · <span class="bad">no active bot — you forfeit rounds until an upload passes</span>');
   const badge = st => ({active: '<span class="ok"><b>active</b></span>', ready: '<span class="muted">ready</span>',
@@ -432,13 +462,13 @@ async function poll() {
     + `<td>${x.status === 'ready' && !s.finished ? `<button onclick="makeActive(${x.n})">Make active</button>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="5" class="muted">Nothing uploaded yet — without an active bot you forfeit each round.</td></tr>';
   // boards
-  $('board').innerHTML = s.leaderboard.map(r => `<tr class="${r.id === 'you' ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td class="n">${r.weighted.toFixed(2)}</td>`
+  $('board').innerHTML = s.leaderboard.map(r => `<tr class="${String(r.id).startsWith('you') ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td class="n">${r.weighted.toFixed(2)}</td>`
     + `<td class="muted">${Object.entries(r.per_round).map(([k,v]) => 'R' + k + ' ' + v).join(' · ')}</td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">Starts with scored round 1.</td></tr>';
   const lr = s.rounds[s.rounds.length - 1];
   $('lastLbl').innerHTML = lr ? esc(lr.label) + ` <span class="muted" style="text-transform:none">· ${lr.iterations.toLocaleString()} tables`
     + '</span>' : '—';
-  $('last').innerHTML = lr ? lr.results.map(r => `<tr class="${r.team === me.name ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td>v${r.version}</td>`
+  $('last').innerHTML = lr ? lr.results.map(r => `<tr class="${mine.some(t => t.name === r.team) ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td>v${r.version}</td>`
     + `<td class="n">${r.avg_points.toFixed(2)}</td><td class="muted" style="font-variant-numeric:tabular-nums">${(r.finishes || []).map(f => (100*f).toFixed(0)).join(' · ')}</td></tr>`).join('') : '';
   $('forfeitLbl').textContent = lr && lr.forfeits && lr.forfeits.length ? 'Forfeited (no active bot): ' + lr.forfeits.join(', ') : '';
   // agents
@@ -450,10 +480,10 @@ async function poll() {
   $('agentsSub').textContent = s.field === 'pilots' ? `· pilot set ${s.pilot_set}: managers A/B testing their pilots` : '· rivals building from scratch';
   $('log').innerHTML = s.log.slice().reverse().map(l => `<div><span class="muted">${mmss(l.t)}</span> ${esc(l.msg)}</div>`).join('');
   // downloads (refresh when rounds change)
-  const key = s.rounds.length + ':' + s.id;
+  const key = s.rounds.length + ':' + s.id + ':' + myId;
   if (key !== lastDl) {
     lastDl = key;
-    const dl = await (await fetch('/api/sim/downloads')).json();
+    const dl = await (await fetch('/api/sim/downloads?team=' + encodeURIComponent(myId))).json();
     const rounds = [...new Set(dl.map(d => d.round))];
     const lbl = r => r.replace('practice_', 'Practice round ').replace('scored_', 'Scored round ');
     const cur = $('dlRound').value;
@@ -462,7 +492,7 @@ async function poll() {
     if (rounds.includes(cur)) $('dlRound').value = cur;
     $('downloads').innerHTML = rounds.map(r => `<tr><td><b>${esc(lbl(r))}</b></td><td>`
       + `<button onclick="sampleDl('${r}')">⬇ Hand sample</button> `
-      + dl.filter(d => d.round === r).map(d => `<a href="/api/sim/download/${d.path}" class="hint" style="margin-left:8px">${esc(d.file)} (${(d.bytes/1024).toFixed(0)} KB)</a>`).join('')
+      + dl.filter(d => d.round === r).map(d => `<a href="/api/sim/download/${d.path}?team=${encodeURIComponent(myId)}" class="hint" style="margin-left:8px">${esc(d.file)} (${(d.bytes/1024).toFixed(0)} KB)</a>`).join('')
       + '</td></tr>').join('') || '<tr><td class="muted">Nothing yet.</td></tr>';
   }
 }

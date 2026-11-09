@@ -155,6 +155,30 @@ def state():
     return jsonify(g.state())
 
 
+def _mine(g):
+    """Which of your bots a request is about (?team=you2 or a 'team' field); default: your first."""
+    body = request.get_json(silent=True) or {}
+    tid = request.args.get("team") or request.form.get("team") or body.get("team") or HUMAN_ID
+    t = g.team(tid)
+    return t.id if t is not None and t.kind == "human" else HUMAN_ID
+
+
+@bp.post("/api/sim/add_bot")
+def add_bot():
+    g = game()
+    if g is None:
+        return jsonify({"ok": False, "problem": "no game running"}), 400
+    return jsonify(g.add_human((request.get_json(silent=True) or {}).get("name")))
+
+
+@bp.post("/api/sim/fast_forward")
+def fast_forward():
+    g = game()
+    if g is None:
+        return jsonify({"ok": False, "problem": "no game running"}), 400
+    return jsonify(g.fast_forward())
+
+
 @bp.post("/api/sim/submit")
 def submit():
     g = game()
@@ -164,7 +188,7 @@ def submit():
     if data is None:
         return jsonify({"ok": False, "problem": "no file"}), 400
     name = request.files["file"].filename if "file" in request.files else "agent.py"
-    return jsonify(g.submit(HUMAN_ID, data, name or "agent.py"))
+    return jsonify(g.submit(_mine(g), data, name or "agent.py"))
 
 
 @bp.post("/api/sim/activate")
@@ -172,7 +196,7 @@ def activate():
     g = game()
     if g is None:
         return jsonify({"ok": False, "problem": "no game running"}), 400
-    return jsonify(g.set_active(HUMAN_ID, (request.get_json(force=True) or {}).get("version")))
+    return jsonify(g.set_active(_mine(g), (request.get_json(force=True) or {}).get("version")))
 
 
 @bp.post("/api/sim/localtest")
@@ -216,7 +240,7 @@ def downloads():
     g = game()
     if g is None:
         return jsonify([])
-    return jsonify(g.downloads(HUMAN_ID))
+    return jsonify(g.downloads(_mine(g)))
 
 
 @bp.get("/api/sim/download/<path:rel>")
@@ -224,7 +248,7 @@ def download(rel):
     g = game()
     if g is None:
         abort(404)
-    base = os.path.abspath(os.path.join(g.workspace(g.team(HUMAN_ID)), "downloads"))
+    base = os.path.abspath(os.path.join(g.workspace(g.team(_mine(g))), "downloads"))
     p = os.path.abspath(os.path.join(base, rel))
     if not p.startswith(base + os.sep) or not os.path.isfile(p):
         abort(404)
@@ -241,7 +265,7 @@ def download_sample(tag):
     if g is None:
         abort(404)
     tag = os.path.basename(tag)
-    base = os.path.join(g.workspace(g.team(HUMAN_ID)), "downloads", tag)
+    base = os.path.join(g.workspace(g.team(_mine(g))), "downloads", tag)
     src = next((os.path.join(base, f) for f in ("hand_history_full.jsonl.gz", "hand_history_subset.jsonl.gz")
                 if os.path.isfile(os.path.join(base, f))), None)
     if src is None:
