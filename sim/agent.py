@@ -161,7 +161,8 @@ class RivalAgent:
         if ev["type"] == "start":
             news = ("The variant has just been announced and the build phase started. Read README.md, RULES.md, "
                     "AGENTS.md and the template agent.py, then build and submit your first bot. Practice runs every "
-                    "10 minutes; scored round 1 starts at minute 60. A team without an active bot forfeits a round.")
+                    f"{g.practice_every:g} minutes; scored round 1 starts at minute {g.build_minutes:g}. "
+                    "A team without an active bot forfeits a round.")
         else:
             rd = ev["round"]
             tag = f"{rd['kind']}_{rd['n']}"

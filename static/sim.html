@@ -95,6 +95,14 @@
       <div class="hint">Local Ollama app (signed in). For ollama.com directly use https://ollama.com/v1 + key.</div></div>
     <div><label>API key (only for ollama.com)</label><input id="api_key" type="password" placeholder="optional"></div>
   </div>
+  <div class="row">
+    <div><label>Build phase (minutes)</label><input id="build_minutes" type="number" min="1" step="1" value="60">
+      <div class="hint">Official: 60.</div></div>
+    <div><label>Minutes between practice rounds</label><input id="practice_every" type="number" min="0.5" step="0.5" value="10">
+      <div class="hint">Official: 10. Lower it for a sped-up event.</div></div>
+    <div><label>Minutes between scored rounds</label><input id="scored_gap" type="number" min="0.5" step="0.5" value="20">
+      <div class="hint">Official: 20.</div></div>
+  </div>
   <details style="margin-top:10px"><summary class="muted">More settings</summary>
     <div class="row">
       <div><label>Points by place (1st..8th)</label><input id="points" value="50, 30, 20, 0, 0, 0, 0, 0"></div>
@@ -215,7 +223,7 @@ async function init() {
   $('model').value = D.model; $('base_url').value = D.base_url;
   $('variant').innerHTML = D.variants.map(v => `<option value="${v.id}" title="${esc(v.description)}">${esc(v.name)}</option>`).join('');
   priceHint(); $('model').oninput = priceHint;
-  ['variant','points','practice_iterations','scored_iterations'].forEach(id => $(id).addEventListener('input', () => renderRules(null)));
+  ['variant','points','practice_iterations','scored_iterations','build_minutes','practice_every','scored_gap'].forEach(id => $(id).addEventListener('input', () => renderRules(null)));
   renderRules(null);
   runIcm();
   setInterval(poll, 1000); poll();
@@ -231,7 +239,8 @@ $('startBtn').onclick = async () => {
     model: $('model').value, base_url: $('base_url').value, api_key: $('api_key').value,
     points: $('points').value.split(/[ ,]+/).filter(Boolean).map(Number),
     practice_iterations: +$('practice_iterations').value, scored_iterations: +$('scored_iterations').value,
-    concurrency: +$('concurrency').value, speed: +$('speed').value, workers: +$('workers').value };
+    concurrency: +$('concurrency').value, speed: +$('speed').value, workers: +$('workers').value,
+    build_minutes: +$('build_minutes').value, practice_every: +$('practice_every').value, scored_gap: +$('scored_gap').value };
   $('startBtn').disabled = true;
   await fetch('/api/sim/new', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   $('startBtn').disabled = false; wantForm = false; lastDl = ''; poll();
@@ -336,7 +345,7 @@ async function poll() {
   // boards
   $('board').innerHTML = s.leaderboard.map(r => `<tr class="${r.id === 'you' ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td class="n">${r.weighted.toFixed(2)}</td>`
     + `<td class="muted">${Object.entries(r.per_round).map(([k,v]) => 'R' + k + ' ' + v).join(' · ')}</td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">Starts with scored round 1 (minute 60).</td></tr>';
+    || '<tr><td colspan="4" class="muted">Starts with scored round 1.</td></tr>';
   const lr = s.rounds[s.rounds.length - 1];
   $('lastLbl').innerHTML = lr ? esc(lr.label) + ` <span class="muted" style="text-transform:none">· ${lr.iterations.toLocaleString()} tables`
     + '</span>' : '—';
@@ -369,6 +378,10 @@ function renderRules(s) {
   const pts = g ? g.points : $('points').value.split(/[ ,]+/).filter(Boolean).map(Number);
   const pIt = g ? g.practice_iterations : +$('practice_iterations').value;
   const sIt = g ? g.scored_iterations : +$('scored_iterations').value;
+  const bM = g ? (g.build_minutes || 60) : +$('build_minutes').value;
+  const pE = g ? (g.practice_every || 10) : +$('practice_every').value;
+  const sG = g ? (g.scored_gap || 20) : +$('scored_gap').value;
+  const sStarts = [0,1,2,3,4,5].map(k => bM + k * sG);
   const ord = ['1st','2nd','3rd','4th','5th','6th','7th','8th'];
   const paid = pts.map((p, i) => p ? `${ord[i]} ${p}` : null).filter(Boolean).join(', ');
   const timing = {
@@ -376,7 +389,7 @@ function renderRules(s) {
     sf2026_reveal_preflop: 'after the preflop betting round, before the flop',
     sf2026_reveal_flop: 'right after the flop is dealt, before the flop betting',
     sf2026_reveal_deal: 'right after the deal, before any betting'}[vid] || '';
-  const key = vid + pts.join() + pIt + sIt;
+  const key = vid + pts.join() + pIt + sIt + bM + pE + sG;
   if (renderRules.key === key) return; renderRules.key = key;
   $('rulesBody').innerHTML = `
   <div class="variant"><b>Variant: ${esc(v.name)}</b>
@@ -393,8 +406,8 @@ function renderRules(s) {
     <div>
       <h3>Schedule</h3>
       <ul>
-        <li>60-minute build after the variant is announced. Practice runs (~${pIt.toLocaleString()} iterations) every 10 minutes; practice never counts.</li>
-        <li>6 scored rounds, starting 20 minutes apart from the end of the build (minutes 60, 80 … 160). Each runs until all ${sIt.toLocaleString()}+ iterations finish: 20 minutes is the gap between starts, not a time limit, so results can arrive during the next window.</li>
+        <li>${bM}-minute build after the variant is announced${bM !== 60 ? ' (official: 60)' : ''}. Practice runs (~${pIt.toLocaleString()} iterations) every ${pE} minutes${pE !== 10 ? ' (official: 10)' : ''}; practice never counts.</li>
+        <li>6 scored rounds, starting ${sG} minutes apart${sG !== 20 ? ' (official: 20)' : ''} from the end of the build (minutes ${sStarts.join(', ')}). Each runs until all ${sIt.toLocaleString()}+ iterations finish: the gap is between starts, not a time limit, so results can arrive during the next window.</li>
         <li>Each round snapshots every team's <b>active</b> bot at its start. <b>No active bot = forfeit</b> (0 points).</li>
         <li>Final score = Σ round score × weight (1x … 6x). Ties: countback on weighted share of 1st places, then 2nd, …</li>
       </ul>

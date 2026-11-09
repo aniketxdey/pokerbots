@@ -104,6 +104,10 @@ class Game:
         self.scored_iterations = int(s.get("scored_iterations", C.SCORED_ITERATIONS))
         self.history_tables = int(s.get("history_tables", 25))
         self.n_rivals = max(0, min(7, int(s.get("rivals", 7))))
+        # schedule (minutes of event time); defaults are the official ones
+        self.build_minutes = max(1.0, float(s.get("build_minutes", C.BUILD_MINUTES)))
+        self.practice_every = max(0.5, float(s.get("practice_every", C.PRACTICE_EVERY)))
+        self.scored_gap = max(0.5, float(s.get("scored_gap", C.SCORED_GAP)))
         self.lock = threading.RLock()
         self.log = []
         self.rounds = []            # finished rounds
@@ -139,11 +143,13 @@ class Game:
     def _make_schedule(self):
         ev = []
         n = 0
-        for m in range(C.PRACTICE_EVERY, C.BUILD_MINUTES, C.PRACTICE_EVERY):
+        m = self.practice_every
+        while m < self.build_minutes - 1e-9:
             n += 1
-            ev.append({"kind": "practice", "n": n, "at": m * 60})
+            ev.append({"kind": "practice", "n": n, "at": round(m * 60)})
+            m += self.practice_every
         for k in range(C.SCORED_ROUNDS):
-            ev.append({"kind": "scored", "n": k + 1, "at": (C.BUILD_MINUTES + k * C.SCORED_GAP) * 60})
+            ev.append({"kind": "scored", "n": k + 1, "at": round((self.build_minutes + k * self.scored_gap) * 60)})
         return ev
 
     def workspace(self, team):
@@ -171,7 +177,7 @@ class Game:
         t = self.event_time()
         if self.finished:
             return "finished"
-        if t < C.BUILD_MINUTES * 60:
+        if t < self.build_minutes * 60:
             return "build"
         return "scored"
 
@@ -481,7 +487,7 @@ class Game:
         return {
             "id": self.id, "settings": self.settings, "variant": self.variant, "speed": self.speed,
             "event_time": t, "phase": self.phase(), "finished": self.finished,
-            "build_left": max(0, C.BUILD_MINUTES * 60 - t),
+            "build_left": max(0, self.build_minutes * 60 - t),
             "next_event": ({"label": ("Practice round %d" % nxt["n"]) if nxt["kind"] == "practice"
                             else ("Scored round %d" % nxt["n"]), "in": nxt["at"] - t} if nxt else None),
             "current_round": self.current_round,
