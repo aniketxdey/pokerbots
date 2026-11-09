@@ -15,7 +15,7 @@ import time
 import traceback
 
 from . import config as C
-from .game import add_spend, run_local_test
+from .game import add_spend, run_local_test, run_proc
 from .llm import LLMError, make_client
 
 MAX_STEPS = 40            # tool calls per iteration (a long Codex-style session)
@@ -130,6 +130,9 @@ class RivalAgent:
                 self.status = "error"
                 self.detail = f"{type(e).__name__}: {e}"
                 self._note("system", "ERROR " + traceback.format_exc(limit=2))
+            if self.stop or self.game.stopped:
+                self.status = "stopped"
+                return
             if self.status not in ("error",):
                 self.status = "waiting"
                 self.detail = "waiting for the next round's data"
@@ -165,14 +168,21 @@ class RivalAgent:
         self._note("user", user)
         client = make_client(self.base_url, self.model, self.api_key)
         for step in range(MAX_STEPS):
-            if g.stopped:
+            if g.stopped or self.stop:
+                self.status = "stopped"
                 return
             self.detail = f"session {self.iterations}, step {step + 1}"
             self.status = "queued"
             with self.sem:
+                if g.stopped or self.stop:  # reset while queued: never send the request
+                    self.status = "stopped"
+                    return
                 self.status = "working"
                 msg, usage = client.chat(messages, TOOLS)
-            self._account(usage)
+            self._account(usage)  # a request already in flight at reset is still billed
+            if g.stopped or self.stop:
+                self.status = "stopped"
+                return
             calls = msg.get("tool_calls") or []
             out_msg = {"role": "assistant", "content": msg.get("content") or ""}
             if calls:
@@ -185,6 +195,9 @@ class RivalAgent:
                 return
             finished = False
             for call in calls:
+                if g.stopped or self.stop:
+                    self.status = "stopped"
+                    return
                 fn = call.get("function", {})
                 name = fn.get("name", "")
                 try:
@@ -270,9 +283,8 @@ class RivalAgent:
                 return "edited"
             if name == "run_python":
                 p = self._path(a["path"])
-                r = subprocess.run([sys.executable, "-I", p], cwd=self.ws, capture_output=True, text=True,
-                                   timeout=60)
-                return (f"exit code {r.returncode}\n--- stdout\n{r.stdout[-6000:]}\n--- stderr\n{r.stderr[-3000:]}")
+                code, out, err = run_proc([sys.executable, "-I", p], self.ws, 60)
+                return f"exit code {code}\n--- stdout\n{out[-6000:]}\n--- stderr\n{err[-3000:]}"
             if name == "local_test":
                 p = self._path(a.get("path") or "bot.py")
                 self.detail = "running local test"

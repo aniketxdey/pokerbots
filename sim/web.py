@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, request, send_file, send_from_directory, a
 
 from . import config as C
 from .agent import RivalAgent
-from .game import Game, HUMAN_ID, RUNS_DIR, total_spend, run_local_test
+from .game import Game, HUMAN_ID, RUNS_DIR, total_spend, run_local_test, kill_all_procs
 
 bp = Blueprint("sim", __name__)
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -45,10 +45,8 @@ def new_game():
     s = request.get_json(force=True) or {}
     with _lock:
         old = game()
-        if old is not None and not old.finished:
-            old.stop()
-            for a in old.agents:
-                a.stop = True
+        if old is not None:
+            _halt(old)
         settings = {
             "team_name": s.get("team_name") or "Aniket & Mitch",
             "rivals": max(0, min(7, int(s.get("rivals", 7)))),
@@ -75,14 +73,34 @@ def new_game():
     return jsonify({"ok": True, "id": g.id})
 
 
+def _halt(g):
+    """Stop the event loop, the running round's worker processes, every AI rival and every
+    script or local test they started. No further model requests are sent."""
+    if g is None:
+        return 0
+    g.stop()
+    for a in g.agents:
+        a.stop = True
+        with a.cv:
+            a.pending = []
+            a.cv.notify_all()
+    return kill_all_procs()
+
+
 @bp.post("/api/sim/stop")
 def stop():
-    g = game()
-    if g is not None:
-        g.stop()
-        for a in g.agents:
-            a.stop = True
+    _halt(game())
     return jsonify({"ok": True})
+
+
+@bp.post("/api/sim/reset")
+def reset():
+    """Kill everything and return to the setup screen."""
+    with _lock:
+        g = game()
+        killed = _halt(g)
+        _G["game"] = None
+    return jsonify({"ok": True, "killed_processes": killed})
 
 
 @bp.get("/api/sim/state")

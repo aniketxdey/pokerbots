@@ -12,6 +12,7 @@
   body { margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; background:var(--bg); color:var(--ink); }
   header { background:var(--felt); color:#fff; padding:12px 24px; display:flex; align-items:center; gap:16px; }
   header h1 { font-size:18px; margin:0; }
+  header #resetBtn { padding:5px 12px; font-weight:600; border-color:#fff3; }
   header a { color:#cfe8da; font-size:13px; }
   header .spend { margin-left:auto; text-align:right; font-size:12px; line-height:1.25; }
   header .spend b { font-size:18px; font-variant-numeric:tabular-nums; }
@@ -45,7 +46,7 @@
   .slot.scored { font-weight:600; }
   .me td { background:#eef7f1; font-weight:600; }
   .tag { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--chip); }
-  .st-working { color:var(--felt-2); font-weight:600; } .st-queued { color:var(--warn); } .st-error { color:var(--accent); font-weight:600; }
+  .st-working { color:var(--felt-2); font-weight:600; } .st-queued { color:var(--warn); } .st-error { color:var(--accent); font-weight:600; } .st-stopped { color:var(--muted); }
   pre { font-family:var(--mono); font-size:11.5px; white-space:pre-wrap; background:#faf9f6; border:1px solid var(--line);
         border-radius:6px; padding:8px; max-height:420px; overflow:auto; margin:6px 0 0; }
   .log { font-family:var(--mono); font-size:11.5px; max-height:220px; overflow:auto; }
@@ -61,6 +62,7 @@
 <body>
 <header>
   <h1>♠ No Limit practice event</h1>
+  <button class="danger hidden" id="resetBtn" title="Stop the round, all AI rivals and their scripts, and go back to setup">■ Reset</button>
   <div class="spend" title="Model spend for the AI rivals (estimated from token usage and the model's price)">
     AI rival spend<br><b id="spendGame">$0.00</b> this game<br><span id="spendAll">$0.00 all time</span>
   </div>
@@ -106,11 +108,6 @@
 </section>
 
 
-<!-- ======================= rules ======================= -->
-<section class="card" id="rulesCard">
-  <h2>Rules for this event</h2>
-  <div id="rulesBody"></div>
-</section>
 <!-- ======================= live event ======================= -->
 <div id="live" class="hidden">
 <section class="card">
@@ -170,6 +167,11 @@
 </section>
 </div>
 
+<!-- ======================= rules ======================= -->
+<section class="card" id="rulesCard">
+  <h2>Rules for this event</h2>
+  <div id="rulesBody"></div>
+</section>
 <dialog id="agentDlg">
   <div style="display:flex;justify-content:space-between;align-items:center"><h3 id="dlgTitle" style="margin:0"></h3><button onclick="agentDlg.close()">Close</button></div>
   <div class="hint" id="dlgPersona"></div>
@@ -210,6 +212,12 @@ $('startBtn').onclick = async () => {
   await fetch('/api/sim/new', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   $('startBtn').disabled = false; wantForm = false; lastDl = ''; poll();
 };
+$('resetBtn').onclick = async () => {
+  if (!confirm('Reset? This stops the round and every AI rival right now (no more model requests) and returns to setup.')) return;
+  $('resetBtn').disabled = true;
+  await fetch('/api/sim/reset', {method:'POST'});
+  $('resetBtn').disabled = false; wantForm = false; lastDl = ''; poll();
+};
 $('stopBtn').onclick = async () => { if (confirm('Stop this event? The AI rivals stop too.')) await fetch('/api/sim/stop', {method:'POST'}); };
 $('newBtn').onclick = () => { wantForm = true; $('newCard').classList.remove('hidden'); window.scrollTo(0,0); };
 
@@ -242,6 +250,7 @@ async function poll() {
   $('spendAll').textContent = money(s.spend.all_time) + ' all time';
   // the setup form shows when there is no event, after one ends, or when "New event" was clicked
   const showForm = !s.id || s.finished || wantForm;
+  $('resetBtn').classList.toggle('hidden', !s.id);
   $('newCard').classList.toggle('hidden', !showForm);
   if (!s.id) { $('live').classList.add('hidden'); renderRules(null); return; }
   renderRules(showForm ? null : s);

@@ -28,6 +28,38 @@ RUNS_DIR = os.path.join(ROOT, "sim_runs")
 SPEND_FILE = os.path.join(RUNS_DIR, "spend.json")
 
 HUMAN_ID = "you"
+
+# every child process the simulator starts (agent scripts, local tests), so Reset can kill them
+_PROCS = set()
+_PROCS_LOCK = threading.Lock()
+
+
+def run_proc(args, cwd, timeout):
+    """subprocess.run replacement that registers the process so it can be killed on reset."""
+    p = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    with _PROCS_LOCK:
+        _PROCS.add(p)
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, out, err
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate()
+        raise
+    finally:
+        with _PROCS_LOCK:
+            _PROCS.discard(p)
+
+
+def kill_all_procs():
+    with _PROCS_LOCK:
+        procs = list(_PROCS)
+    for p in procs:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    return len(procs)
 ALLOWED_IMPORT_ROOTS = None  # standard library only (checked against sys.stdlib_module_names)
 
 
@@ -462,9 +494,9 @@ class _StopFlag:
 
 def run_local_test(path, variant, tables=3, timeout=180):
     try:
-        r = subprocess.run([sys.executable, "-m", "sim.localtest", path, "--variant", variant,
-                            "--tables", str(tables)], cwd=ROOT, capture_output=True, text=True, timeout=timeout)
-        line = (r.stdout.strip().splitlines() or ["{}"])[-1]
+        code, out, err = run_proc([sys.executable, "-m", "sim.localtest", path, "--variant", variant,
+                                   "--tables", str(tables)], ROOT, timeout)
+        line = (out.strip().splitlines() or ['{"ok": false, "problem": "local test was stopped"}'])[-1]
         return json.loads(line)
     except subprocess.TimeoutExpired:
         return {"ok": False, "problem": f"local test took longer than {timeout}s"}
