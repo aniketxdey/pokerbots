@@ -5,7 +5,7 @@ their action through a tool call, exactly the way rival agents talk to the model
 endpoint answers, that the model makes valid tool calls, and reports speed, tokens and cost.
 
     python -m sim.smoketest                                  # local Ollama, default model
-    python -m sim.smoketest --model gpt-oss:120b-cloud --concurrency 3
+    python -m sim.smoketest --model glm-5.3:cloud --concurrency 3
     python -m sim.smoketest --base-url https://ollama.com/v1 --api-key KEY
 """
 import argparse

@@ -3,7 +3,7 @@
 # Ollama exposes an OpenAI-compatible API. With the desktop app signed in, cloud models are
 # served through the local server; without it, use https://ollama.com/v1 plus an API key.
 DEFAULT_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_MODEL = "gpt-oss:120b-cloud"
+DEFAULT_MODEL = "glm-5.3:cloud"
 
 # USD per million tokens (input, cached input, output), from ollama.com/pricing as of
 # 2026-10-07. Prices change: edit here or in the UI. Unknown models fall back to "default".
@@ -13,6 +13,7 @@ PRICES = {
     "deepseek-v4.1-flash": (0.30, 0.006, 1.20),
     "deepseek-v4-pro": (1.32, 0.044, 3.96),
     "gemma4": (0.14, 0.05, 0.40),
+    "glm-5.3": (1.40, 0.26, 4.40),
     "glm-5.3-flash": (0.15, 0.03, 0.50),
     "glm-5.2": (1.40, 0.26, 4.40),
     "kimi-k2.6": (0.95, 0.16, 4.00),
