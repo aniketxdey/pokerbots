@@ -85,8 +85,8 @@
   <div class="row">
     <div><label>Your team</label><input id="team_name" value="Aniket & Mitch"></div>
     <div><label>Field</label><select id="field">
-        <option value="ai">AI rivals building from scratch</option>
-        <option value="pilots">Pilot strategies (a frozen set)</option></select></div>
+        <option value="pilots">Pilot strategies (a frozen set)</option>
+        <option value="ai">AI rivals building from scratch</option></select></div>
     <div class="aiOnly"><label>AI rival teams (0–7)</label><input id="rivals" type="number" min="0" max="7" value="7">
       <div class="hint">Empty seats are filled with house bots that don't change.</div></div>
     <div><label>Variant timing</label><select id="variant"></select></div>
@@ -96,12 +96,13 @@
       <div class="hint">Each pilot is a team; its frozen original starts as active upload v1.</div></div>
     <div><label>Static clones</label><input id="clones" type="number" min="0" max="8" value="2">
       <div class="hint">Unchanged copies of pilots that never iterate (a baseline). 12 pilots + 2 clones + you = 15
-        entrants: one 8-seat table and one 7-seat table with a non-scoring filler. 3 clones = two full tables.</div></div>
+        entrants on two 8-seat tables (16 seats): the 16th seat is a non-scoring filler, a copy of a bot from the other table, as at the real event.</div></div>
     <div><label>Clone which pilots (optional)</label><input id="clone_ids" placeholder="ids, comma separated; blank = random">
+      <div class="hint">Default: astra-6-high, fable-5.1-high.</div>
     </div>
     <div><label>Managers</label><input id="managers" type="number" min="0" max="12" value="3">
       <div class="hint">Model agents that cycle through the pilots each round, A/B testing small changes. 0 = static pilots, no model spend.</div></div>
-    <div><label>A/B test tables</label><input id="ab_tables" type="number" min="4" max="100" value="30">
+    <div><label>A/B test tables</label><input id="ab_tables" type="number" min="4" max="200" value="100">
       <div class="hint">Paired tables per A/B test (each played with A and with B).</div></div>
   </div>
   <div class="row">
@@ -269,6 +270,7 @@ async function init() {
   if (D.has_openai_key) $('keyHint').textContent = 'OPENAI_API_KEY is set in the environment: leave blank to use it.';
   $('variant').innerHTML = D.variants.map(v => `<option value="${v.id}" title="${esc(v.description)}">${esc(v.name)}</option>`).join('');
   if (D.variant) $('variant').value = D.variant;
+  if (D.clone_ids) $('clone_ids').value = D.clone_ids;
   $('field').onchange = fieldVis; fieldVis();
   loadPilots();
   priceHint(); $('model').oninput = priceHint;
@@ -298,7 +300,8 @@ async function loadPilots() {
   const cur = $('pilot_set').value;
   $('pilot_set').innerHTML = r.sets.slice().reverse().map(st => `<option value="${esc(st.name)}">${esc(st.name)} (${st.pilots.filter(p => p.ok).length} pilots)</option>`).join('')
     || '<option value="">(freeze a set first)</option>';
-  if (cur && r.sets.some(st => st.name === cur)) $('pilot_set').value = cur;
+  const want = cur || (D && D.pilot_set);
+  if (want && r.sets.some(st => st.name === want)) $('pilot_set').value = want;
 }
 $('freezeBtn').onclick = async () => {
   const name = $('freezeName').value.trim();

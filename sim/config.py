@@ -6,6 +6,8 @@
 # smarter than o3). Needs an API key: paste it in the setup form or set OPENAI_API_KEY.
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-5.6-terra"
+DEFAULT_PILOT_SET = "originals"
+DEFAULT_CLONES = "astra-6-high, fable-5.1-high"   # static baseline copies
 DEFAULT_VARIANT = "sf2026_reveal_preflop"   # the announced variant: discard & reveal after preflop betting
 DEFAULT_CONCURRENCY = 7
 OLLAMA_BASE_URL = "http://localhost:11434/v1"

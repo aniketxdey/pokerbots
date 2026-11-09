@@ -279,12 +279,15 @@ How the event runs:
 
 - **Pilots:** each pilot is a team. Its frozen original is active upload v1 from the first round. The workspace holds `pilot_original/` for reference and a `NOTES.md` A/B log.
 - **Clones:** unchanged copies of chosen pilots (random if you don't pick) that never iterate, so they show whether the iterated versions actually improved.
-- **Managers:** each manager owns about 12/N pilots. At the start and after every round, it works through its pilots one at a time in short sessions of at most 14 tool calls:
-  - propose one or two changes in `agent_b.py`;
-  - run `ab_test` (paired tables: same seat, opponents and cards for A and B, played against the other teams' current active bots at real time limits);
-  - `adopt` (overwrite agent.py and upload it) only if the verdict is "B better", or if B fixes failed decisions without losing points;
-  - log the result in NOTES.md.
-- **Seating:** 12 pilots + 2 clones + you is 15 entrants, so one 8-seat table and one 7-seat table with a non-scoring filler. Use 3 clones for two full tables.
+- **Managers:** each manager owns about 12/N pilots and works through them one at a time after every round. They don't run at the start, because there's no hand history yet. Their instructions are to iterate on the pilot they were given, never to rewrite it. Each session (at most 14 tool calls) goes like this:
+  - read NOTES.md and run `hand_stats` (the `hand-history/analyze.py` summary of the round's hands);
+  - name one leak, backed by a real sample;
+  - make the minimal edit in `agent_b.py` (`start_b` copies agent.py);
+  - run `ab_test` (paired, 100 tables by default);
+  - `adopt` only if B is better.
+  "No change" is a normal outcome. Each pilot's workspace also has `STRATEGY.md`, the authoring model's own write-up, when it wrote one.
+- **Clones:** the defaults are astra-6-high and fable-5.1-high, and the default set is `originals`.
+- **Seating:** 12 pilots + 2 clones + you is 15 entrants on two 8-seat tables (16 seats). The 16th seat is a non-scoring filler: a copy of a bot from the other table.
 
 Standalone A/B test: `python -m sim.abtest a.py b.py --opponents x.py y.py ... --tables 40 --variant sf2026_reveal_preflop`.
 

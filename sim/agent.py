@@ -7,6 +7,7 @@ file and its workspace, like a team that reopens its coding assistant after each
 """
 import json
 import os
+import shutil
 import re
 import subprocess
 import sys
@@ -76,10 +77,10 @@ TOOLS = [
 
 
 PILOT_MAX_STEPS = 14      # manager sessions are short: propose, A/B test, adopt or not, note it
-AB_TABLES = 30
+AB_TABLES = 100
 
-PILOT_TOOL_NAMES = ("list_files", "read_file", "search", "write_file", "edit_file", "run_python", "submit",
-                    "set_active", "finish")
+PILOT_TOOL_NAMES = ("list_files", "read_file", "search", "write_file", "edit_file", "run_python", "set_active",
+                    "finish")
 PILOT_TOOLS = [t for t in TOOLS if t["function"]["name"] in PILOT_TOOL_NAMES] + [
     {"type": "function", "function": {
         "name": "ab_test",
@@ -90,7 +91,21 @@ PILOT_TOOLS = [t for t in TOOLS if t["function"]["name"] in PILOT_TOOL_NAMES] + 
         "parameters": {"type": "object", "properties": {
             "a": {"type": "string", "description": "default agent.py"},
             "b": {"type": "string", "description": "default agent_b.py"},
-            "tables": {"type": "integer", "description": f"default {AB_TABLES}, max 100"}}, "required": []}}},
+            "tables": {"type": "integer", "description": f"default {AB_TABLES}, max 200"}}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "hand_stats",
+        "description": "Summarize your pilot's play in a round's hand history (hand-history/analyze.py): results, "
+                       "preflop by position and stack depth, postflop and showdowns, discard & reveal, all-ins, "
+                       "opponents' tendencies, biggest pots. Chip results in big blinds. Default: the newest round.",
+        "parameters": {"type": "object", "properties": {
+            "round": {"type": "string", "description": "downloads folder, e.g. practice_2 (default newest)"},
+            "top": {"type": "integer", "description": "how many biggest pots to list (default 5)"}},
+            "required": []}}},
+    {"type": "function", "function": {
+        "name": "start_b",
+        "description": "Copy agent.py to agent_b.py, a fresh candidate to edit with edit_file (the bots are too "
+                       "large to rewrite with write_file).",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {
         "name": "adopt",
         "description": "Copy agent_b.py (or the given file) over agent.py and upload it (test match; becomes "
@@ -140,6 +155,8 @@ class RivalAgent:
             return
         if ev["type"] == "round" and self.game.next_event() is None:
             return  # nothing left to submit for: don't spend tokens
+        if ev["type"] == "start" and self.mode == "pilot":
+            return  # pilots iterate on evidence; at the start there is no hand history yet
         with self.cv:
             # if new data arrives while we're busy, only the latest drop is worked on next
             self.pending = [ev]
@@ -309,32 +326,41 @@ class RivalAgent:
     def _pilot_prompt(self, ev, clock):
         g = self.game
         t = self.team
-        if ev["type"] == "start":
-            news = ("The event has started. Your pilot's original strategy is active as upload v1 and plays from "
-                    "the first round. No results yet: look for a weakness or a likely leak in agent.py for this "
-                    "variant (see RULES.md) and test a fix.")
-        else:
-            rd = ev["round"]
-            tag = f"{rd['kind']}_{rd['n']}"
-            news = (f"{rd['label']} results are in: downloads/{tag}/my_bot_stats.json and results.json (read "
-                    f"these first, they are small), hand_history_subset.jsonl.gz (read with a run_python "
-                    f"script, see hand-history/reader.py).")
+        rd = ev.get("round") or {}
+        tag = f"{rd.get('kind')}_{rd.get('n')}" if rd else ""
+        mine = next((r for r in (rd.get("bots") or []) if r.get("id") == t.id), None)
+        place = ""
+        if mine:
+            ranked = sorted(rd.get("bots") or [], key=lambda r: -r.get("avg_points", 0))
+            place = (f" Your pilot finished {ranked.index(mine) + 1} of {len(ranked)} with "
+                     f"{mine.get('avg_points', 0):.2f} points per table over {mine.get('tables', 0)} tables.")
+        news = (f"{rd.get('label', 'A round')} results are in.{place} Files: downloads/{tag}/my_bot_stats.json, "
+                f"results.json, hand_history_subset.jsonl.gz (a random share of your tables).")
         system = (
-            f"You are {t.manager}, one of the strategy managers in a pokerbot practice event (No Limit "
-            f"regional rules, variant {g.variant}). You look after several pilot strategies in turn; right now "
-            f"you are working on pilot '{t.pilot}' (team {t.name}). The pilot was written by a strong model and "
-            "is a good base: improve it with small, tested changes, never rewrite it.\n\n"
-            f"Each session is SHORT (at most {PILOT_MAX_STEPS} tool calls) and your messages should be brief "
-            "(1-3 sentences):\n"
-            "1. Read NOTES.md (your A/B log for this pilot) and the newest results if any.\n"
-            "2. Propose one or two specific modifications (e.g. a threshold, a bet size, a discard/reveal "
-            "choice, a fix for failed decisions). Don't repeat a change NOTES.md shows already failed.\n"
-            "3. Write the modified bot to agent_b.py (write_file a copy of agent.py, or edit_file a copy).\n"
-            "4. ab_test (agent.py vs agent_b.py). Adopt B only if the verdict is 'B better', or B fixes "
-            "failed decisions/timeouts without losing points; adopt uploads it.\n"
-            "5. Append one line to NOTES.md: the change, B_minus_A +/- std_error, adopted or not. Then finish.\n\n"
-            "The bot must keep act(state, memory) from poker_agent_sdk and stay under 1 ms per decision. "
-            "pilot_original/ is the untouched original for reference.")
+            f"You are {t.manager}, a strategy manager in a pokerbot practice event (No Limit regional rules, "
+            f"variant {g.variant}; RULES.md explains it). You look after several pilots in turn. Right now: "
+            f"pilot '{t.pilot}' (team {t.name}). Its strategy, agent.py, was built by a strong model"
+            + (" and STRATEGY.md explains it" if os.path.isfile(os.path.join(self.ws, "STRATEGY.md")) else "")
+            + ".\n\n"
+            "Your job is to ITERATE ON THIS STRATEGY, not to replace it. Never rewrite, restructure or swap out its "
+            "approach. Each change is a small, principled adjustment (a threshold, a range, a bet size, a "
+            "discard/reveal rule, a fix for failed decisions) that targets a specific leak you can point to in the "
+            "evidence: the hand_stats summary of this round's hand history and my_bot_stats.json. A leak needs a "
+            "real sample behind it (hundreds of hands in that spot, not a few big pots); a few unlucky all-ins are "
+            "not a leak.\n\n"
+            f"Each session is SHORT (at most {PILOT_MAX_STEPS} tool calls); keep your messages to 1-3 sentences.\n"
+            "1. Read NOTES.md (your log for this pilot: what was tried and what happened) and call hand_stats.\n"
+            "2. Name the single clearest leak with its numbers, and the logic in agent.py that causes it (search / "
+            "read_file around it). If nothing stands out, or it was already tried, make NO change: write "
+            "'no change - <reason>' in NOTES.md and finish. No change is a good outcome; never change for the "
+            "sake of changing.\n"
+            "3. start_b, then edit_file agent_b.py with the minimal edit (one or two related changes at most).\n"
+            "4. ab_test (agent.py vs agent_b.py). adopt only if the verdict is 'B better', or B removes failed "
+            "decisions/timeouts without losing points. Otherwise keep agent.py as it is.\n"
+            "5. Append one line to NOTES.md: round, leak (with numbers), change, B_minus_A +/- std_error, "
+            "adopted or not. Then finish.\n\n"
+            "The bot must keep act(state, memory) from poker_agent_sdk and stay well under 1 ms per decision. "
+            "pilot_original/ holds the untouched original.")
         user = (f"{news}\n\n{clock}\nActive upload: v{t.active}. "
                 f"Last session on this pilot: {self.last_summary or '(none - first session)'}")
         return system, user
@@ -435,6 +461,11 @@ class RivalAgent:
                 return json.dumps(self.game.set_active(self.team.id, a.get("version")))
             if name == "ab_test":
                 return self._ab_test(a)
+            if name == "start_b":
+                shutil.copyfile(os.path.join(self.ws, "agent.py"), os.path.join(self.ws, "agent_b.py"))
+                return "agent_b.py is now a copy of agent.py; edit it with edit_file"
+            if name == "hand_stats":
+                return self._hand_stats(a)
             if name == "adopt":
                 src = self._path(a.get("path") or "agent_b.py")
                 if not os.path.isfile(src):
@@ -454,6 +485,21 @@ class RivalAgent:
         except Exception as e:
             return f"error: {type(e).__name__}: {e}"
 
+    def _hand_stats(self, a):
+        dl = os.path.join(self.ws, "downloads")
+        rounds = sorted((d for d in os.listdir(dl) if os.path.isdir(os.path.join(dl, d))),
+                        key=lambda d: os.path.getmtime(os.path.join(dl, d))) if os.path.isdir(dl) else []
+        r = a.get("round") or (rounds[-1] if rounds else None)
+        if not r:
+            return "no round results yet"
+        f = os.path.join(dl, r, "hand_history_subset.jsonl.gz")
+        if not os.path.isfile(f):
+            return f"no hand history in downloads/{r} (rounds: {', '.join(rounds)})"
+        from .game import ROOT
+        code, out, err = run_proc([sys.executable, os.path.join(self.ws, "hand-history", "analyze.py"), f,
+                                   "--top", str(max(0, min(10, int(a.get("top") or 5))))], self.ws, 120)
+        return (out or "") + (f"\n(stderr) {err[-800:]}" if code else "")
+
     def _ab_test(self, a):
         g = self.game
         pa = self._path(a.get("a") or "agent.py")
@@ -464,7 +510,7 @@ class RivalAgent:
         opps = [t.current for t in g.teams if t.id != self.team.id and t.current and os.path.isfile(t.current)]
         if not opps:
             return "error: no opponents available"
-        n = max(4, min(100, int(a.get("tables") or self.ab_tables)))
+        n = max(4, min(200, int(a.get("tables") or self.ab_tables)))
         self.detail = f"A/B test, {n} tables"
         from .game import ROOT
         args = [sys.executable, "-m", "sim.abtest", pa, pb, "--tables", str(n), "--variant", g.variant,

@@ -32,7 +32,7 @@ def defaults():
     from engine.scoring import POINT_PRESETS
     return jsonify({
         "base_url": C.DEFAULT_BASE_URL, "model": C.DEFAULT_MODEL, "rivals": 7, "concurrency": C.DEFAULT_CONCURRENCY,
-        "variant": C.DEFAULT_VARIANT,
+        "variant": C.DEFAULT_VARIANT, "pilot_set": C.DEFAULT_PILOT_SET, "clone_ids": C.DEFAULT_CLONES,
         "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
         "variants": [{"id": v.id, "name": v.name, "description": v.description} for v in V
                      if v.id.startswith("sf2026")],
@@ -66,12 +66,12 @@ def new_game():
             "build_minutes": max(1.0, float(s.get("build_minutes", 60))),
             "practice_every": max(0.5, float(s.get("practice_every", 10))),
             "scored_gap": max(0.5, float(s.get("scored_gap", 20))),
-            "field": "pilots" if s.get("field") == "pilots" else "ai",
-            "pilot_set": s.get("pilot_set") or "",
+            "field": "ai" if s.get("field") == "ai" else "pilots",
+            "pilot_set": s.get("pilot_set") or C.DEFAULT_PILOT_SET,
             "clones": max(0, min(8, int(s.get("clones", 2)))),
-            "clone_ids": s.get("clone_ids") or "",
+            "clone_ids": s.get("clone_ids", C.DEFAULT_CLONES),
             "managers": max(0, min(12, int(s.get("managers", 3)))),
-            "ab_tables": max(4, min(100, int(s.get("ab_tables", 30)))),
+            "ab_tables": max(4, min(200, int(s.get("ab_tables", 100)))),
         }
         while len(settings["points"]) < 8:
             settings["points"].append(0.0)

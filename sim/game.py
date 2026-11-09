@@ -136,7 +136,7 @@ class Game:
         self.listeners = []         # callables(event_dict) for agents
         rng = random.Random(self.id)
         self.teams = [Team(HUMAN_ID, s.get("team_name") or "Aniket & Mitch", "human")]
-        self.field = s.get("field", "ai")
+        self.field = s.get("field", "pilots")
         self.pilot_set = None
         if self.field == "pilots":
             self._build_pilot_field(s, rng)
@@ -244,6 +244,9 @@ class Game:
             shutil.copytree(src, ws, ignore=ign, dirs_exist_ok=True)
             _writable(ws)   # copytree also copies the frozen set's read-only permissions
             shutil.copytree(src, os.path.join(ws, "pilot_original"), ignore=ign)
+            doc = os.path.join(os.path.dirname(src), "_docs", f"{team.pilot}.md")
+            if os.path.isfile(doc):   # the authoring model's own write-up of the strategy, when it wrote one
+                shutil.copyfile(doc, os.path.join(ws, "STRATEGY.md"))
             v1 = os.path.join(ws, "submissions", "v01", "bot")
             shutil.copytree(src, v1, ignore=ign)
             _writable(ws)
