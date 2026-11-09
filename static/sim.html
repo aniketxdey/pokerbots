@@ -164,9 +164,13 @@
   <section class="card">
     <h2>Your downloads</h2>
     <div class="flex" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-      <label style="margin:0">Hand sample to download</label>
-      <input id="dlPct" type="number" min="1" max="100" value="20" style="width:70px"> <span class="hint" style="margin:0">% of your hands, picked at random each click</span>
+      <label style="margin:0">Round</label>
+      <select id="dlRound" style="width:auto"><option value="">— no rounds yet —</option></select>
+      <label style="margin:0">Hands</label>
+      <input id="dlPct" type="number" min="1" max="100" value="20" style="width:70px"><span class="hint" style="margin:0">%</span>
+      <button id="dlBtn">⬇ Download hand sample</button>
     </div>
+    <div class="hint" style="margin-bottom:6px">One hand-history file per round. Each click picks a fresh random share of the hands you played in that round.</div>
     <div class="hint">Available after each round: results, your bot's stats and your hand history.</div>
     <table><tbody id="downloads"></tbody></table>
   </section>
@@ -296,6 +300,7 @@ $('submitBtn').onclick = async () => {
   $('submitMsg').innerHTML = r.ok ? `<span class="ok">v${r.version} passed its test match and is now your active bot (from the next round).</span>` : `<span class="bad">${r.version ? 'v' + r.version + ' rejected' : 'Not uploaded'}: ${esc(r.problem)}</span>`;
   poll();
 };
+$('dlBtn').onclick = () => { if ($('dlRound').value) sampleDl($('dlRound').value); };
 function sampleDl(tag) {
   const pct = Math.min(100, Math.max(1, +$('dlPct').value || 20));
   window.location = `/api/sim/download_sample/${encodeURIComponent(tag)}?pct=${pct}`;
@@ -378,7 +383,12 @@ async function poll() {
     lastDl = key;
     const dl = await (await fetch('/api/sim/downloads')).json();
     const rounds = [...new Set(dl.map(d => d.round))];
-    $('downloads').innerHTML = rounds.map(r => `<tr><td><b>${esc(r.replace('_', ' '))}</b></td><td>`
+    const lbl = r => r.replace('practice_', 'Practice round ').replace('scored_', 'Scored round ');
+    const cur = $('dlRound').value;
+    $('dlRound').innerHTML = rounds.length ? rounds.slice().reverse().map(r => `<option value="${r}">${lbl(r)}</option>`).join('')
+      : '<option value="">— no rounds yet —</option>';
+    if (rounds.includes(cur)) $('dlRound').value = cur;
+    $('downloads').innerHTML = rounds.map(r => `<tr><td><b>${esc(lbl(r))}</b></td><td>`
       + `<button onclick="sampleDl('${r}')">⬇ Hand sample</button> `
       + dl.filter(d => d.round === r).map(d => `<a href="/api/sim/download/${d.path}" class="hint" style="margin-left:8px">${esc(d.file)} (${(d.bytes/1024).toFixed(0)} KB)</a>`).join('')
       + '</td></tr>').join('') || '<tr><td class="muted">Nothing yet.</td></tr>';
