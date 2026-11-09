@@ -15,7 +15,7 @@ import time
 import traceback
 
 from . import config as C
-from .game import add_spend, run_local_test, run_proc
+from .game import add_spend, run_proc
 from .llm import LLMError, OutOfCreditsError, make_client
 
 MAX_STEPS = 40            # tool calls per iteration (a long Codex-style session)
@@ -51,16 +51,24 @@ TOOLS = [
                        "your workspace. 60 s limit. Returns stdout and stderr.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {
-        "name": "local_test",
-        "description": "Play your bot for a few tables against sample bots under the real 1 ms limit; reports "
-                       "places, crashes, timeouts and decision times.",
+        "name": "poker_agent",
+        "description": "Run the starter kit's poker-agent command. 'play' plays local tables vs examples/ "
+                       "(100 ms bank) and reports places, failed decisions and timings; 'check' runs the upload "
+                       "test match (heads-up, 1 ms, no bank).",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"}, "tables": {"type": "integer"}}, "required": []}}},
+            "command": {"type": "string", "enum": ["play", "check"]}, "path": {"type": "string"},
+            "tables": {"type": "integer"}}, "required": ["command"]}}},
     {"type": "function", "function": {
         "name": "submit",
-        "description": "Submit a bot file. It becomes your active bot from the next round. One accepted "
-                       "submission per 5 minutes; rejected files don't use the slot.",
+        "description": "Upload a bot: agent.py, or a folder (zipped for you) with agent.py at its root. One upload "
+                       "every 30 s. It plays a heads-up test match; if it passes it becomes your active bot "
+                       "(used from the next round). Returns the result and the validation log.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "set_active",
+        "description": "Make an earlier upload (that passed its test match) your active bot.",
+        "parameters": {"type": "object", "properties": {"version": {"type": "integer"}},
+                       "required": ["version"]}}},
     {"type": "function", "function": {
         "name": "finish", "description": "End this work session with a short summary of what you did.",
         "parameters": {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}}},
@@ -151,13 +159,15 @@ class RivalAgent:
         self.status = "working"
         g = self.game
         if ev["type"] == "start":
-            news = ("The event has just started. Read RULES.md, api.py and the example bot.py, then build and "
-                    "submit your first bot. Practice round 1 starts at minute 10.")
+            news = ("The variant has just been announced and the build phase started. Read README.md, RULES.md, "
+                    "AGENTS.md and the template agent.py, then build and submit your first bot. Practice runs every "
+                    "10 minutes; scored round 1 starts at minute 60. A team without an active bot forfeits a round.")
         else:
             rd = ev["round"]
             tag = f"{rd['kind']}_{rd['n']}"
-            news = (f"{rd['label']} just finished. Its downloads are in downloads/{tag}/ (results.json, "
-                    f"my_bot_stats.json, hand_history.jsonl). Use them to improve your bot.")
+            news = (f"{rd['label']} results are in. Downloads are in downloads/{tag}/ (results.json, "
+                    f"my_bot_stats.json, hand_history.jsonl.gz - read it with hand-history/reader.py). "
+                    f"Use them to improve your bot.")
         nxt = g.next_event()
         clock = (f"Event time {_fmt_t(g.event_time())}. "
                  + (f"Next: {nxt and ('Practice round %d' % nxt['n'] if nxt['kind'] == 'practice' else 'Scored round %d' % nxt['n'])}"
@@ -167,8 +177,8 @@ class RivalAgent:
             f"regional). You work autonomously with the tools provided, inside the team's workspace.\n\n"
             f"Team style: {self.team.persona}\n\n"
             "Goal: finish as high as possible on the final weighted leaderboard. The rules are in RULES.md. Your bot "
-            "must be one Python file with class Agent, standard library only, 1 ms per decision. Use local_test before "
-            "submitting. Keep NOTES.md up to date with what you tried and what the data showed (it is your memory "
+            "is agent.py implementing act(state, memory) from poker_agent_sdk (see README.md, RULES.md, AGENTS.md), "
+            "1 ms per decision. Test with poker_agent (check, play) before submitting. Keep NOTES.md up to date with what you tried and what the data showed (it is your memory "
             "between sessions). When you are done for now, call finish with a short summary.")
         user = (f"{news}\n\n{clock}\n"
                 f"Your last session's summary: {self.last_summary or '(none - first session)'}")
@@ -291,18 +301,33 @@ class RivalAgent:
                 return "edited"
             if name == "run_python":
                 p = self._path(a["path"])
-                code, out, err = run_proc([sys.executable, "-I", p], self.ws, 60)
+                code, out, err = run_proc([sys.executable, p], self.ws, 60, env=self._env())
                 return f"exit code {code}\n--- stdout\n{out[-6000:]}\n--- stderr\n{err[-3000:]}"
-            if name == "local_test":
-                p = self._path(a.get("path") or "bot.py")
-                self.detail = "running local test"
-                return json.dumps(run_local_test(p, self.game.variant, max(1, min(5, int(a.get("tables") or 3)))))
+            if name == "poker_agent":
+                cmd = a.get("command", "play")
+                p = self._path(a.get("path") or "agent.py")
+                args = [sys.executable, "-m", "poker_agent_sdk", cmd, p, "--variant", self.game.variant]
+                if cmd == "play":
+                    args += ["--tables", str(max(1, min(20, int(a.get("tables") or 5))))]
+                self.detail = f"running poker-agent {cmd}"
+                code, out, err = run_proc(args, self.ws, 300, env=self._env())
+                return (out or err)[-OUT_LIMIT:]
             if name == "submit":
-                p = self._path(a.get("path") or "bot.py")
+                p = self._path(a.get("path") or "agent.py")
+                if os.path.isdir(p):
+                    import tempfile
+                    from poker_agent_sdk.cli import pack
+                    z = os.path.join(tempfile.mkdtemp(prefix="pack_"), "bot.zip")
+                    r = pack(p, z, self.game.variant)
+                    if not os.path.exists(z):
+                        return json.dumps(r)
+                    p = z
                 with open(p, "rb") as f:
                     data = f.read()
-                r = self.game.submit(self.team.id, data)
-                return json.dumps(r)
+                self.detail = "uploading (test match)"
+                return json.dumps(self.game.submit(self.team.id, data, os.path.basename(p)))
+            if name == "set_active":
+                return json.dumps(self.game.set_active(self.team.id, a.get("version")))
             if name == "finish":
                 return "session finished"
             return f"unknown tool {name}"
@@ -310,6 +335,11 @@ class RivalAgent:
             return "timed out after 60 s"
         except Exception as e:
             return f"error: {type(e).__name__}: {e}"
+
+    def _env(self):
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.path.join(self.ws, "sdk")
+        return env
 
     # ------------------------------------------------------------ bookkeeping
     def _account(self, usage):
@@ -348,7 +378,7 @@ class RivalAgent:
                 "detail": self.detail, "iterations": self.iterations, "steps": self.steps,
                 "tokens_in": self.tokens_in, "tokens_cached": self.tokens_cached, "tokens_out": self.tokens_out,
                 "cost": self.cost, "last_summary": self.last_summary,
-                "submissions": len([s for s in self.team.submissions if s["ok"]])}
+                "submissions": len([s for s in self.team.submissions if s.get("status") in ("ready", "active")])}
 
 
 def _short(args):

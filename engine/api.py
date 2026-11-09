@@ -152,7 +152,7 @@ class HandResult:
     """Passed to hand_over()."""
 
     __slots__ = ("hand_number", "deltas", "stacks", "board", "board2", "showdown", "winners",
-                 "eliminated", "my_seat", "variant", "bounty_rank")
+                 "eliminated", "my_seat", "variant", "bounty_rank", "history", "up_cards")
 
     def __init__(self, **kw):
         for k in self.__slots__:

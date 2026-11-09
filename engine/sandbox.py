@@ -102,7 +102,7 @@ TIMEOUT = object()
 ERROR = object()
 
 
-def timed_call(fn, args, limit_s, mode, stats, is_decision):
+def timed_call(fn, args, limit_s, mode, stats, is_decision, elapsed=None):
     """Call fn(*args) under the time limit. Returns the result, or TIMEOUT / ERROR."""
     global _armed
     use_alarm = mode == "hard" and HAS_ALARM and limit_s > 0
@@ -131,6 +131,8 @@ def timed_call(fn, args, limit_s, mode, stats, is_decision):
                 stats.error_samples.append(sample)
         result = ERROR
     dt = time.perf_counter() - t0
+    if elapsed is not None:
+        elapsed.append(dt)
     if is_decision:
         stats.decisions += 1
         stats.time_total += dt

@@ -38,7 +38,7 @@ def _cs(cards):
 
 class Seat:
     __slots__ = ("bot", "stack", "eliminated", "hole", "up", "bet", "contributed", "folded",
-                 "all_in", "in_hand", "start_stack", "reopened", "bounty", "bid", "discarded")
+                 "all_in", "in_hand", "start_stack", "reopened", "bounty", "bid", "discarded", "bank_s")
 
     def __init__(self, bot, stack):
         self.bot = bot
@@ -94,6 +94,9 @@ class Table:
         self.board = []
         self.board2 = []
         self.limit_s = cfg.time_limit_ms / 1000.0
+        bank0 = getattr(cfg, "time_bank_ms", 0.0) / 1000.0
+        for st in self.seats:
+            st.bank_s = bank0
         self.cb_limit_s = getattr(cfg, "callback_time_limit_ms", cfg.time_limit_ms) / 1000.0
         self.mode = cfg.time_mode
         self.payouts = list(cfg.points) + [0] * max(0, self.n - len(cfg.points))
@@ -119,8 +122,33 @@ class Table:
         fn = getattr(agent, method, None)
         if fn is None:
             return None
-        limit = self.limit_s if is_decision else self.cb_limit_s
-        return timed_call(fn, (arg,), limit, self.mode, slot.stats, is_decision)
+        prep = getattr(agent, "_prepare", None)
+        if prep is not None:          # SDK bots: build state outside the bot's clock (host side)
+            if is_decision:
+                arg.time_bank_left_ms = self.seats[seat_idx].bank_s * 1000.0
+                arg.table_rules = self._sdk_rules()
+            arg = prep(method, arg)
+        if not is_decision:
+            return timed_call(fn, (arg,), self.cb_limit_s, self.mode, slot.stats, False)
+        # decision: decision_ms, plus whatever is left of this table's time bank
+        seat = self.seats[seat_idx]
+        bank = seat.bank_s
+        el = []
+        res = timed_call(fn, (arg,), self.limit_s + bank, self.mode, slot.stats, True, el)
+        if el and self.mode != "off":
+            over = el[0] - self.limit_s
+            if res is TIMEOUT:
+                seat.bank_s = 0.0          # a timeout empties the bank
+            elif over > 0:
+                seat.bank_s = max(0.0, bank - over)
+        return res
+
+    def _sdk_rules(self):
+        cfg = self.cfg
+        lvl = (self.hand_number - 1) // cfg.blind_interval if self.hand_number else 0
+        return {"blind_level": lvl + 1, "hands_until_next_level": cfg.blind_interval - (self.hand_number - 1) % cfg.blind_interval,
+                "bust_order": [i for i in getattr(self, "_bust_order", [])],
+                "players_remaining": sum(1 for x in self.seats if not x.eliminated)}
 
     # ------------------------------------------------------------------ helpers
     def _next_live(self, i):
@@ -1007,6 +1035,9 @@ class Table:
         busted = [i for i in range(n) if not seats[i].eliminated and seats[i].stack == 0]
         if busted:
             busted.sort(key=lambda i: -seats[i].start_stack)
+            if not hasattr(self, "_bust_order"):
+                self._bust_order = []
+            self._bust_order.extend(sorted(busted, key=lambda i: seats[i].start_stack))
             groups = []
             for i in busted:
                 if groups and seats[groups[-1][0]].start_stack == seats[i].start_stack:
@@ -1039,7 +1070,8 @@ class Table:
                                  showdown={k: list(v) for k, v in shown.items()},
                                  winners={k: winnings[k] for k in range(n) if winnings[k]},
                                  eliminated=list(busted), my_seat=i, variant=self.v.id,
-                                 bounty_rank=s.bounty)
+                                 bounty_rank=s.bounty, history=list(self.history),
+                                 up_cards={k: _cs(seats[k].up) for k in range(n) if seats[k].up})
                 self._call(i, "hand_over", res)
 
     def _record_hand(self, shown, winnings, deltas, busted):

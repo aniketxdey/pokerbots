@@ -196,24 +196,48 @@ improve their own bots during the event, the way real teams do with a coding ass
 python server.py --port 5055     # then open http://127.0.0.1:5055 (macOS uses port 5000 for AirPlay)
 ```
 
-**Event format (same as the real one):** a 60-minute build phase with an unscored practice
-round at minutes 10, 20, 30, 40 and 50; then six scored rounds at minutes 60, 80, …, 160,
-weighted 1–6. Each round freezes every team's current submission at its start. Submissions:
-one Python file with `class Agent`, standard library only, ≤ 100 MB, one accepted submission
-per 5 minutes (rejected files don't use the slot). Until you submit, the starter example bot
-plays for you. Tables follow the engine's official rules (8 bots, 2,000 chips, blinds up every
-25 hands, 200-hand cap with ICM, 1 ms per decision, no network, state reset per table,
-anonymous opponents). Variant: Discard & Reveal (pick the timing).
+**Event format (No Limit '26 Boston format page and participant docs):** a 60-minute build
+with ~1,000-iteration practice runs every 10 minutes (never scored); six scored rounds starting
+20 minutes apart from the end of the build, weights 1x..6x, at least 5,000 iterations each. A
+round runs until all its iterations finish (20 minutes is the gap between starts), so results
+can arrive during the next window. Each round snapshots every team's **active** bot at its
+start; a team without one forfeits (0 points). Final ties are broken by countback (weighted
+share of 1st places, then 2nd, ...).
 
-**After every round** each team gets the same downloads: `results.json` (every team's points,
-win and top-3 rates), `my_bot_stats.json` (decisions, timeouts, errors, timings) and
-`hand_history.jsonl` (its own hands, opponents shown as seat numbers). The page also has the
-starter kit (rules, API, example bot, local test harness) and a **Local test** button that plays
-your bot for 3 tables under the 1 ms limit.
+**Tables:** 8 players, 2,000 chips, blinds 10/20 rising every 20 hands (levels after 10/20 are
+a stand-in until the real kit), 250-hand cap with ICM for survivors, 50/30/20 points.
+Same-hand busts: more chips at the start of the hand places higher. Short tables are filled
+with bots not already seated, whose finishes never score.
+
+**Bots use the SDK interface** (`poker_agent_sdk/`, a local mock of the published one):
+`act(self, state, memory) -> (Action, bytes)`, with `state.events`, `state.legal_actions`,
+`state.can(kind)`, `state.config`, per-table `memory` (64 KB, starts empty), 1 ms per decision
+plus a 100 ms per-table bank, and strict fallback: a timeout, exception or illegal action
+(raise totals are not clamped) checks when free, otherwise folds. Each team runs as a pool
+of copies, so `self` can't be relied on between calls. Variant phases: `Action("discard",
+cards=[...])` and `Action("reveal", cards=[...])`. Older `act(obs)` bots (the ported ones and
+`sf_contender.py`) still run in the engine as house bots, but uploads must use the SDK.
+
+**Uploads:** `agent.py` or a zip with `agent.py` at its root (50 MB uploaded, 200 MB unpacked,
+1,000 entries, 1 MB of code), one upload every 30 seconds. Each upload plays a heads-up test
+match (up to 20 hands vs check-or-fold, 1 ms, no bank) and is rejected if it doesn't start,
+crashes, or fails more than 10% of its decisions. A passing upload becomes active; you can make
+an earlier one active again.
+
+**Starter kit** (button on the page): `agent.py` (template with a memory example),
+`examples/` (`check_or_fold`, `min_raiser`), `sdk/` (the SDK, the engine with the local
+simulator, `icm.py`, payouts and blinds), the `poker-agent` command (`play`, `check`, `pack`),
+`requirements.txt`, `RULES.md`, `hand-history/` (sample + streaming reader), `README.md`,
+`AGENTS.md`, `CLAUDE.md`.
+
+**After every round** each team gets: `results.json` (every team's average and finishes in
+every place), `my_bot_stats.json`, and `hand_history.jsonl.gz` (gzipped JSON lines, opponents
+named). The page also has an ICM calculator and a **Local test** button (`check` + 5 `play`
+tables).
 
 **AI rivals.** Each rival is a coding agent with the tools a team's AI would have: list, read
 and search files, write and edit files, run Python scripts (e.g. to analyze its hand
-history), run the local test, and submit. It works in its own workspace with the same rules,
+history), run `poker-agent play` / `check`, upload, and choose its active bot. It works in its own workspace with the same rules,
 starter kit and downloads you get. Each team has a different style (methodical, aggressive,
 math-first, exploitative, simple, variant-focused, balanced). A rival works only when there
 is new data: once at the start (the starter kit) and once after each round's downloads,

@@ -29,8 +29,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The rules only say "blinds start at 10/20 and increase every 25 hands" - the increments are
 # not published, so this default (8 levels = 200 hands) is an editable assumption.
-DEFAULT_BLINDS = [[10, 20], [15, 30], [25, 50], [40, 80], [60, 120], [100, 200],
-                  [150, 300], [250, 500]]
+DEFAULT_BLINDS = [[10, 20], [15, 30], [20, 40], [30, 60], [40, 80], [50, 100], [75, 150],
+                  [100, 200], [150, 300], [200, 400], [300, 600], [400, 800], [500, 1000]]
+# The format page gives 10/20 rising every 20 hands with a 250-hand cap; the exact levels come in
+# the starter kit (state.config.blinds). These 13 levels are a stand-in until then.
 
 
 @dataclass
@@ -43,10 +45,12 @@ class Config:
     table_size: int = 8
     starting_stack: int = 2000
     blind_schedule: list = field(default_factory=lambda: [list(b) for b in DEFAULT_BLINDS])
-    blind_interval: int = 25
-    max_hands: int = 200
+    blind_interval: int = 20
+    max_hands: int = 250
     points: list = field(default_factory=lambda: list(DEFAULT_POINTS))
     time_limit_ms: float = 1.0
+    time_bank_ms: float = 100.0      # per-table bank that decision overruns draw on (0 = none)
+    memory_bytes: int = 65536        # SDK bots: per-table memory limit
     time_mode: str = "hard"          # hard | soft | off
     callback_time_limit_ms: float = 1.0  # limit for new_table/new_hand/hand_over callbacks
     init_time_limit_ms: float = 2000.0  # budget for loading the module + Agent() per table
@@ -90,6 +94,8 @@ class Config:
         p = (p + [0.0] * self.table_size)[: self.table_size]
         self.points = p
         self.time_limit_ms = float(self.time_limit_ms)
+        self.time_bank_ms = max(0.0, float(self.time_bank_ms))
+        self.memory_bytes = max(0, int(self.memory_bytes))
         self.callback_time_limit_ms = float(self.callback_time_limit_ms)
         if self.time_mode not in ("hard", "soft", "off"):
             self.time_mode = "hard"
@@ -151,9 +157,25 @@ def _make_agent(bot, stats, cfg):
         return None
 
     def build():
+        from poker_agent_sdk._host import is_sdk_module, SDKHost
+        cached = _W.setdefault("sdk_modules", {}).get(bot["id"])
+        if cached is not None:
+            return SDKHost(cached, cfg)
         mod = types.ModuleType("bot_" + bot["id"])
         mod.__file__ = bot["path"]
-        exec(bot["code"], mod.__dict__)
+        d = os.path.dirname(os.path.abspath(bot["path"]))
+        added = d not in sys.path
+        if added:
+            sys.path.insert(0, d)   # a zip upload's own files are importable next to agent.py
+        try:
+            exec(bot["code"], mod.__dict__)
+        finally:
+            if added:
+                sys.path.remove(d)
+        if is_sdk_module(mod):
+            # imported once per process, like production; each table gets fresh copies of Agent()
+            _W["sdk_modules"][bot["id"]] = mod
+            return SDKHost(mod, cfg)
         return mod.Agent()
 
     agent = timed_call(build, (), cfg.init_time_limit_ms / 1000.0, cfg.time_mode, stats, False)
@@ -171,7 +193,7 @@ def _run_chunk(task):
     nb = len(bots)
     ts = cfg.table_size
     agg = [{"tables": 0, "points": 0.0, "place_sum": 0.0, "wins": 0, "top3": 0, "busts": 0,
-            "hands": 0, "chips_end": 0, "stats": BotStats()} for _ in range(nb)]
+            "hands": 0, "chips_end": 0, "stats": BotStats(), "place_counts": [0.0] * ts} for _ in range(nb)]
     log = None
     tables_played = 0
     hist = []
@@ -189,9 +211,12 @@ def _run_chunk(task):
         rng.shuffle(order)
         tables = [order[k:k + ts] for k in range(0, nb, ts)]
         for t_i, members in enumerate(tables):
+            # short tables are filled with bots not already seated there; fillers never score.
+            # A field smaller than a table plays short tables.
             fillers = []
-            while len(members) + len(fillers) < ts:
-                fillers.append(rng.randrange(nb))
+            if nb >= ts:
+                pool = [b for b in range(nb) if b not in members]
+                fillers = rng.sample(pool, min(len(pool), ts - len(members)))
             seat_list = [(b, True) for b in members] + [(b, False) for b in fillers]
             rng.shuffle(seat_list)  # random seats
             # bots' own randomness: reproducible per table
@@ -205,10 +230,12 @@ def _run_chunk(task):
             # new_table callback
             for seat, sl in enumerate(slots):
                 if sl.agent is not None and hasattr(sl.agent, "new_table"):
-                    info = {"seat": seat, "num_players": ts, "starting_stack": cfg.starting_stack,
+                    info = {"seat": seat, "num_players": len(slots), "table_id": f"{round_idx + 1}-{it + 1}-{t_i + 1}", "starting_stack": cfg.starting_stack,
                             "blind_schedule": [list(b) for b in cfg.blind_schedule],
                             "blind_interval": cfg.blind_interval, "max_hands": cfg.max_hands,
-                            "points": list(cfg.points), "time_limit_ms": cfg.time_limit_ms}
+                            "points": list(cfg.points), "time_limit_ms": cfg.time_limit_ms,
+                            "time_bank_ms": cfg.time_bank_ms, "memory_bytes": cfg.memory_bytes,
+                            "variant": cfg.variant}
                     timed_call(sl.agent.new_table, (info,), cfg.callback_time_limit_ms / 1000.0,
                                cfg.time_mode, sl.stats, False)
             tl = [] if (want_log and log is None) else None
@@ -238,6 +265,12 @@ def _run_chunk(task):
                 a["points"] += res.points[seat]
                 place = res.places[seat] or ts
                 a["place_sum"] += place
+                lo, hi = int(place), -(-place // 1)
+                if lo == hi:
+                    a["place_counts"][int(lo) - 1] += 1
+                else:  # tied places (same-hand busts with equal starting stacks) split evenly
+                    a["place_counts"][int(lo) - 1] += 0.5
+                    a["place_counts"][int(hi) - 1] += 0.5
                 if place == 1:
                     a["wins"] += 1
                 if place <= 3:
@@ -303,7 +336,7 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
     if cfg.history_bot and cfg.history_tables:
         q = -(-cfg.history_tables // len(tasks))  # spread the recorded tables across the round
         tasks = [t + (q,) for t in tasks]
-    total = {"tables": [0] * nb, "points": [0.0] * nb, "place_sum": [0.0] * nb,
+    total = {"place_counts": [[0.0] * cfg.table_size for _ in range(nb)], "tables": [0] * nb, "points": [0.0] * nb, "place_sum": [0.0] * nb,
              "wins": [0] * nb, "top3": [0] * nb, "busts": [0] * nb, "hands": [0] * nb,
              "chips_end": [0] * nb}
     stats = [BotStats() for _ in range(nb)]
@@ -331,7 +364,10 @@ def run_round(cfg, snap, round_idx, seed, progress=None, stop=None):
             remaining -= 1
             for i, a in enumerate(res["agg"]):
                 for k in total:
-                    total[k][i] += a[k]
+                    if k == "place_counts":
+                        total[k][i] = [x + y for x, y in zip(total[k][i], a[k])]
+                    else:
+                        total[k][i] += a[k]
                 stats[i].merge(BotStats.from_dict(a["stats"]))
             if res["log"] is not None:
                 log = res["log"]
@@ -378,6 +414,7 @@ def _round_summary(snap, total, stats, cfg):
             "bust_rate": total["busts"][i] / t if t else 0.0,
             "avg_hands_survived": total["hands"][i] / t if t else 0.0,
             "avg_end_chips": total["chips_end"][i] / t if t else 0.0,
+            "place_counts": list(total.get("place_counts", [[]] * len(snap))[i]),
             "decisions": st.decisions, "timeouts": st.timeouts,
             "timeout_rate": st.timeouts / st.decisions if st.decisions else 0.0,
             "callback_timeouts": st.callback_timeouts,

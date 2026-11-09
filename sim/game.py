@@ -34,9 +34,12 @@ _PROCS = set()
 _PROCS_LOCK = threading.Lock()
 
 
-def run_proc(args, cwd, timeout):
+def run_proc(args, cwd, timeout, env=None):
     """subprocess.run replacement that registers the process so it can be killed on reset."""
-    p = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if env is None:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = ROOT + os.pathsep + env.get("PYTHONPATH", "")
+    p = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     with _PROCS_LOCK:
         _PROCS.add(p)
     try:
@@ -67,34 +70,6 @@ def _now():
     return time.time()
 
 
-def _stdlib():
-    names = set(getattr(sys, "stdlib_module_names", ()))
-    if not names:  # Python < 3.10: be permissive
-        return None
-    return names
-
-
-def check_imports(src):
-    """Return a problem string if the bot imports anything outside the standard library."""
-    std = _stdlib()
-    if std is None:
-        return ""
-    try:
-        tree = ast.parse(src)
-    except SyntaxError as e:
-        return f"syntax error line {e.lineno}: {e.msg}"
-    for node in ast.walk(tree):
-        mods = []
-        if isinstance(node, ast.Import):
-            mods = [a.name for a in node.names]
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            mods = [node.module]
-        for m in mods:
-            if m.split(".")[0] not in std:
-                return f"imports '{m}': only the Python standard library is available"
-    return ""
-
-
 class Team:
     def __init__(self, tid, name, kind, persona="", house_bot=None):
         self.id = tid
@@ -102,17 +77,18 @@ class Team:
         self.kind = kind            # human | ai | house
         self.persona = persona
         self.house_bot = house_bot
-        self.submissions = []       # [{n, t, file, ok, problem, bytes}]
-        self.last_submit_t = None   # event seconds
-        self.current = None         # path of the active (latest accepted) submission
+        self.submissions = []       # uploads: [{n, t, file, status, problem, log, bytes}]
+        self.last_submit_t = None   # event seconds of the last upload
+        self.active = None          # upload number of the active bot
+        self.current = None         # path of the active bot's agent.py (house bots: their file)
 
     def to_dict(self, ev_t):
         cd = 0
         if self.last_submit_t is not None:
-            cd = max(0, C.SUBMIT_COOLDOWN_S - (ev_t - self.last_submit_t))
+            cd = max(0, C.UPLOAD_COOLDOWN_S - (ev_t - self.last_submit_t))
         return {"id": self.id, "name": self.name, "kind": self.kind, "persona": self.persona,
-                "submissions": self.submissions[-20:], "n_submissions": len(self.submissions),
-                "has_bot": self.current is not None, "cooldown_s": cd}
+                "submissions": self.submissions[-30:], "n_submissions": len(self.submissions),
+                "active": self.active, "has_bot": self.current is not None, "cooldown_s": cd}
 
 
 class Game:
@@ -124,8 +100,8 @@ class Game:
         self.speed = float(s.get("speed", 1.0))
         self.variant = s.get("variant", "sf2026_reveal")
         self.points = s.get("points", [50, 30, 20, 0, 0, 0, 0, 0])
-        self.practice_iterations = int(s.get("practice_iterations", 1000))
-        self.scored_iterations = int(s.get("scored_iterations", 10000))
+        self.practice_iterations = int(s.get("practice_iterations", C.PRACTICE_ITERATIONS))
+        self.scored_iterations = int(s.get("scored_iterations", C.SCORED_ITERATIONS))
         self.history_tables = int(s.get("history_tables", 25))
         self.n_rivals = max(0, min(7, int(s.get("rivals", 7))))
         self.lock = threading.RLock()
@@ -206,52 +182,75 @@ class Game:
                 return e
         return None
 
-    # ------------------------------------------------------------------ submissions
-    def submit(self, team_id, src, filename="bot.py"):
-        """Validate and accept a submission (same rules for every team)."""
+    # ------------------------------------------------------------------ uploads
+    def submit(self, team_id, src, filename="agent.py"):
+        """Upload agent.py or a zip with agent.py at its root. Same rules for every team: one
+        upload per 30 s, package limits, then a heads-up test match (up to 20 hands vs
+        check-or-fold, 1 ms, no time bank). A passing upload becomes active automatically."""
+        with self.lock:
+            team = self.team(team_id)
+            if team is None or team.kind == "house":
+                return {"ok": False, "problem": "unknown team"}
+            if self.finished:
+                return {"ok": False, "problem": "the event is over: uploads are closed"}
+            t = self.event_time()
+            if team.last_submit_t is not None and t - team.last_submit_t < C.UPLOAD_COOLDOWN_S:
+                wait = C.UPLOAD_COOLDOWN_S - (t - team.last_submit_t)
+                return {"ok": False, "problem": f"one upload every 30 seconds: wait {wait:.0f} s (event time)"}
+            team.last_submit_t = t
+            n = len(team.submissions) + 1
+            data = src.encode("utf-8") if isinstance(src, str) else src
+            is_zip = data[:4] == b"PK\x03\x04" or filename.lower().endswith(".zip")
+            vdir = os.path.join(self.workspace(team), "submissions", f"v{n:02d}")
+            os.makedirs(vdir, exist_ok=True)
+            raw = os.path.join(vdir, "upload.zip" if is_zip else "agent.py")
+            with open(raw, "wb") as f:
+                f.write(data)
+            rec = {"n": n, "t": round(t), "bytes": len(data), "status": "testing", "problem": "", "log": [],
+                   "file": os.path.basename(raw), "kind": "zip" if is_zip else "agent.py"}
+            team.submissions.append(rec)
+        # the test match runs outside the lock (a few seconds)
+        from poker_agent_sdk.cli import unpack
+        bdir = os.path.join(vdir, "bot")
+        ok, problem, agent = unpack(raw, bdir)
+        if ok:
+            r = run_check(raw, self.variant)
+            ok, problem, rec["log"] = r.get("ok", False), r.get("problem", ""), r.get("log", [])
+        with self.lock:
+            if not ok:
+                rec["status"], rec["problem"] = "rejected", problem
+                self._log(f"{team.name} upload v{n} rejected: {problem}")
+            else:
+                rec["status"] = "ready"
+                rec["path"] = agent
+                if not self.finished:
+                    team.active, team.current = n, agent
+                    rec["status"] = "active"
+                    for o in team.submissions:
+                        if o is not rec and o["status"] == "active":
+                            o["status"] = "ready"
+                self._log(f"{team.name} upload v{n} passed its test match and is now active")
+            self._save()
+        return {"ok": ok, "problem": problem, "version": n, "status": rec["status"], "log": rec["log"]}
+
+    def set_active(self, team_id, n):
         with self.lock:
             team = self.team(team_id)
             if team is None or team.kind == "house":
                 return {"ok": False, "problem": "unknown team"}
             if self.finished:
                 return {"ok": False, "problem": "the event is over"}
-            t = self.event_time()
-            if team.last_submit_t is not None and t - team.last_submit_t < C.SUBMIT_COOLDOWN_S:
-                wait = C.SUBMIT_COOLDOWN_S - (t - team.last_submit_t)
-                return {"ok": False, "problem": f"one submission per 5 minutes: wait {wait / 60:.1f} more "
-                                                f"minutes (event time)"}
-            data = src.encode("utf-8") if isinstance(src, str) else src
-            n = len(team.submissions) + 1
-            rec = {"n": n, "t": round(t), "bytes": len(data), "ok": False, "problem": ""}
-            if len(data) > C.MAX_BOT_BYTES:
-                rec["problem"] = "file larger than 100 MB"
-            else:
-                text = data.decode("utf-8", errors="replace")
-                prob = check_imports(text)
-                if not prob:
-                    try:
-                        tree = ast.parse(text)
-                        if not any((isinstance(nd, ast.ClassDef) and nd.name == "Agent") or
-                                   (isinstance(nd, ast.Assign) and any(getattr(x, "id", "") == "Agent"
-                                                                       for x in nd.targets))
-                                   for nd in tree.body):
-                            prob = "no top-level `Agent` class"
-                    except SyntaxError as e:
-                        prob = f"syntax error line {e.lineno}: {e.msg}"
-                rec["problem"] = prob
-            path = os.path.join(self.workspace(team), "submissions", f"v{n:02d}.py")
-            with open(path, "wb") as f:
-                f.write(data)
-            rec["file"] = os.path.basename(path)
-            # a rejected file does not use up the 5-minute slot
-            if not rec["problem"]:
-                rec["ok"] = True
-                team.current = path
-                team.last_submit_t = t
-            team.submissions.append(rec)
-            self._log(f"{team.name} submitted v{n}" + ("" if rec["ok"] else f" (rejected: {rec['problem']})"))
+            rec = next((x for x in team.submissions if x["n"] == int(n)), None)
+            if rec is None or rec["status"] not in ("ready", "active"):
+                return {"ok": False, "problem": "only uploads that passed their test match can be made active"}
+            for o in team.submissions:
+                if o["status"] == "active":
+                    o["status"] = "ready"
+            rec["status"] = "active"
+            team.active, team.current = rec["n"], rec["path"]
+            self._log(f"{team.name} made upload v{rec['n']} active")
             self._save()
-            return {"ok": rec["ok"], "problem": rec["problem"], "version": n}
+            return {"ok": True, "version": rec["n"]}
 
     def team(self, tid):
         return next((t for t in self.teams if t.id == tid), None)
@@ -271,54 +270,88 @@ class Game:
         self._save()
 
     def _loop(self):
+        """Freeze every round at its scheduled start; compute rounds one after another. A round
+        finishes when all its iterations complete (20 minutes is the gap between starts, not a
+        time limit), so results can arrive after the next round has already been frozen."""
+        import queue
+        q = queue.Queue()
+        worker = threading.Thread(target=self._compute_loop, args=(q,), daemon=True)
+        worker.start()
         try:
             for e in self.schedule:
                 while self.event_time() < e["at"]:
                     if self.stopped:
+                        q.put(None)
                         return
                     time.sleep(0.2)
                 if self.stopped:
+                    q.put(None)
                     return
-                self._run_round(e)
-            self.finished = True
-            self._log("Event finished")
-            self._notify({"type": "finished"})
-            self._save()
+                with self.lock:
+                    snap, forfeits = self._freeze(e)
+                e["started"] = True
+                label = self._label(e)
+                self._log(f"{label}: active bots frozen - " + ", ".join(f"{s['name']} v{s['version']}" for s in snap)
+                          + (f"; forfeits (no active bot): {', '.join(forfeits)}" if forfeits else ""))
+                q.put((e, snap, forfeits))
+            q.put(None)
         except Exception:
             self._log("ERROR in event loop: " + traceback.format_exc(limit=3))
+            q.put(None)
+
+    def _compute_loop(self, q):
+        while True:
+            item = q.get()
+            if item is None:
+                break
+            if self.stopped:
+                break
+            try:
+                self._run_round(*item)
+            except Exception:
+                self._log("ERROR computing round: " + traceback.format_exc(limit=3))
+        if not self.stopped:
             self.finished = True
+            self._log("Event finished: all rounds computed")
+            self._notify({"type": "finished"})
             self._save()
 
+    @staticmethod
+    def _label(e):
+        return f"Practice round {e['n']}" if e["kind"] == "practice" else f"Scored round {e['n']}"
+
     def _freeze(self, e):
-        snap = []
+        """Snapshot every team's active bot. A team without one forfeits the round (0 points)."""
+        snap, forfeits = [], []
         tag = f"{e['kind']}{e['n']}"
         fdir = os.path.join(self.dir, "frozen", tag)
         os.makedirs(fdir, exist_ok=True)
         for t in self.teams:
-            src_path = t.current
-            note = ""
-            if src_path is None:  # nothing submitted: the starter kit's example bot plays
-                src_path = os.path.join(self.workspace(t), "kit_example_bot.py")
-                note = "no submission (starter example)"
-            dst = os.path.join(fdir, t.id + ".py")
-            shutil.copy(src_path, dst)
-            with open(dst) as f:
+            if t.current is None:
+                forfeits.append(t.name)
+                continue
+            src_dir = os.path.dirname(t.current)
+            dst = os.path.join(fdir, t.id)
+            if t.kind == "house":
+                os.makedirs(dst, exist_ok=True)
+                path = os.path.join(dst, os.path.basename(t.current))
+                shutil.copy(t.current, path)
+            else:
+                shutil.copytree(src_dir, dst, dirs_exist_ok=True)
+                path = os.path.join(dst, "agent.py")
+            with open(path, encoding="utf-8") as f:
                 code = f.read()
-            ver = next((s["n"] for s in reversed(t.submissions) if s["ok"]), 0)
-            snap.append({"id": t.id, "name": t.name, "path": dst, "code": code, "version": ver, "note": note})
-        return snap
+            snap.append({"id": t.id, "name": t.name, "path": path, "code": code,
+                         "version": t.active or 0, "note": ""})
+        return snap, forfeits
 
-    def _run_round(self, e):
+    def _run_round(self, e, snap, forfeits):
         from engine.tournament import Config, run_round
-        e["started"] = True
-        with self.lock:
-            snap = self._freeze(e)
-        label = f"Practice round {e['n']}" if e["kind"] == "practice" else f"Scored round {e['n']}"
-        self._log(f"{label}: submissions frozen " +
-                  ", ".join(f"{s['name']} v{s['version']}" for s in snap))
+        label = self._label(e)
         iters = self.practice_iterations if e["kind"] == "practice" else self.scored_iterations
         cfg = Config(variant=self.variant, iterations=iters, points=list(self.points),
-                     history_bot="*", history_tables=self.history_tables,
+                     history_bot="*", history_tables=self.history_tables, max_hands=C.HAND_CAP,
+                     blind_interval=C.HANDS_PER_LEVEL, time_bank_ms=C.TIME_BANK_MS,
                      workers=int(self.settings.get("workers", 0)),
                      seed=random.randrange(1, 2 ** 31)).validate()
         self.current_round = {"kind": e["kind"], "n": e["n"], "label": label, "done": 0, "total": iters,
@@ -331,21 +364,12 @@ class Game:
                 # estimated real seconds to finish
                 self.current_round["eta_s"] = round((total - done) * elapsed / done) if done else None
 
-        # The round must finish before the next round's freeze, as on the real schedule. If this
-        # machine is too slow for the full table count, the round stops 30 s (event time) early and
-        # is scored on the tables completed so far.
-        nxt = next((x for x in self.schedule if x["at"] > e["at"]), None)
-        end_at = (nxt["at"] if nxt else e["at"] + C.SCORED_GAP * 60) - 30
-        deadline_real = self.started_real + end_at / self.speed
-        res = run_round(cfg, snap, 0, cfg.seed, progress=progress,
-                        stop=_StopFlag(lambda: self.stopped or time.time() > deadline_real))
+        res = run_round(cfg, snap, 0, cfg.seed, progress=progress, stop=_StopFlag(lambda: self.stopped))
+        if self.stopped:
+            return
         hist = res.pop("hand_history", [])
-        cut = res["iterations_done"] < iters and not self.stopped
-        if cut:
-            self._log(f"{label}: this machine finished {res['iterations_done']:,} of {iters:,} tables before "
-                      f"the next round; scored on those (lower the table count to run full rounds)")
         rd = {"kind": e["kind"], "n": e["n"], "label": label, "iterations": res["iterations_done"],
-              "planned": iters, "cut_short": cut,
+              "planned": iters, "forfeits": forfeits,
               "seconds": round(res["seconds"], 1), "finished_t": round(self.event_time()),
               "bots": res["bots"], "versions": {s["id"]: s["version"] for s in snap},
               "weight": (e["n"] if e["kind"] == "scored" else 0)}
@@ -363,24 +387,38 @@ class Game:
         rows = sorted(rd["bots"], key=lambda b: -b["avg_points"])
         out = []
         for k, b in enumerate(rows):
-            out.append({"rank": k + 1, "team": b["name"], "avg_points": round(b["avg_points"], 3),
+            t = b["tables"] or 1
+            out.append({"rank": k + 1, "id": b["id"], "team": b["name"], "avg_points": round(b["avg_points"], 3),
                         "win_rate": round(b["win_rate"], 4), "top3_rate": round(b["top3_rate"], 4),
                         "avg_place": round(b["avg_place"] or 0, 3), "tables": b["tables"],
+                        "finishes": [round(c / t, 4) for c in (b.get("place_counts") or [])],
                         "version": rd["versions"].get(b["id"])})
         return out
 
     def leaderboard(self):
+        """Final score = sum of round score x weight. Equal totals are ordered by countback: the
+        weighted share of tables won, then of second places, and so on."""
         scored = [r for r in self.rounds if r["kind"] == "scored"]
         board = {}
         for r in scored:
+            w = r["weight"]
             for b in r["bots"]:
-                e = board.setdefault(b["id"], {"id": b["id"], "team": b["name"], "weighted": 0.0, "per_round": {}})
-                e["weighted"] += r["weight"] * b["avg_points"]
+                e = board.setdefault(b["id"], {"id": b["id"], "team": b["name"], "weighted": 0.0, "per_round": {},
+                                               "countback": [0.0] * 8})
+                e["weighted"] += w * b["avg_points"]
                 e["per_round"][r["n"]] = round(b["avg_points"], 2)
-        rows = sorted(board.values(), key=lambda e: -e["weighted"])
+                t = b["tables"] or 1
+                for k, c in enumerate((b.get("place_counts") or [])[:8]):
+                    e["countback"][k] += w * c / t
+        for t in self.teams:  # forfeited rounds score zero
+            if t.kind != "house" and scored:
+                board.setdefault(t.id, {"id": t.id, "team": t.name, "weighted": 0.0, "per_round": {},
+                                        "countback": [0.0] * 8})
+        rows = sorted(board.values(), key=lambda e: (-round(e["weighted"], 9), [-x for x in e["countback"]]))
         for k, e in enumerate(rows):
             e["rank"] = k + 1
-            e["weighted"] = round(e["weighted"], 2)
+            e["weighted"] = round(e["weighted"], 3)
+            e["countback"] = [round(x, 4) for x in e["countback"]]
         return rows
 
     def _write_downloads(self, rd, hist):
@@ -409,16 +447,16 @@ class Game:
                 stats["version"] = rd["versions"].get(team.id)
                 with open(os.path.join(d, "my_bot_stats.json"), "w") as f:
                     json.dump(stats, f, indent=1)
-            with open(os.path.join(d, "hand_history.jsonl"), "w") as f:
+            names = {}
+            import gzip
+            with gzip.open(os.path.join(d, "hand_history.jsonl.gz"), "wt") as f:
                 for tb in by_team.get(team.id, []):
                     meta = {"round": rd["label"], "table": tb["table"], "my_place": tb["place"],
                             "my_points": tb["points"]}
                     for h in tb["hands"]:
                         h = dict(h)
-                        me = h["my_seat"]
-                        # opponents are anonymized: seat numbers only
-                        h["seats"] = [dict(x, name=("you" if x["seat"] == me else f"seat {x['seat']}"))
-                                      for x in h["seats"]]
+                        # opponents are named in the downloads (seats are anonymous in play)
+                        h["seats"] = [dict(x) for x in h["seats"]]
                         f.write(json.dumps(dict(meta, **h)) + "\n")
 
     # ------------------------------------------------------------------ misc
@@ -451,7 +489,7 @@ class Game:
                           "running": bool(e.get("started") and not e.get("done"))} for e in self.schedule],
             "teams": [tm.to_dict(t) for tm in self.teams],
             "rounds": [{"kind": r["kind"], "n": r["n"], "label": r["label"], "results": self._results_table(r),
-                        "iterations": r["iterations"], "planned": r.get("planned"), "cut_short": r.get("cut_short")}
+                        "iterations": r["iterations"], "planned": r.get("planned"), "forfeits": r.get("forfeits", [])}
                        for r in self.rounds],
             "leaderboard": self.leaderboard(),
             "log": self.log[-80:],
@@ -490,6 +528,19 @@ class _StopFlag:
 
     def is_set(self):
         return self.fn()
+
+
+def run_check(path, variant, timeout=180):
+    """The upload test match, in a separate process (a hanging bot can't stall the event)."""
+    try:
+        code, out, err = run_proc([sys.executable, "-m", "poker_agent_sdk", "check", path, "--variant", variant],
+                                  ROOT, timeout)
+        line = out.strip()
+        return json.loads(line) if line else {"ok": False, "problem": "test match was stopped", "log": [err[-500:]]}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "problem": "did not finish its test match (stopped responding)", "log": []}
+    except Exception as e:
+        return {"ok": False, "problem": f"test match failed: {e}", "log": []}
 
 
 def run_local_test(path, variant, tables=3, timeout=180):
@@ -539,84 +590,121 @@ class KitSpec:
 
 
 def write_starter_kit(ws, game):
+    """Write the starter kit in the layout the organizers announced:
+    agent.py, examples/, sdk/, requirements.txt, RULES.md, hand-history/, README.md,
+    AGENTS.md, CLAUDE.md (plus a poker-agent launcher)."""
     from engine.variants import get_variant
     from engine.tournament import DEFAULT_BLINDS
     v = get_variant(game.variant)
-    api_doc = open(os.path.join(ROOT, "engine", "api.py")).read()
-    template = open(os.path.join(ROOT, "templates", "agent_template.py")).read()
-    pts = ", ".join(f"{p:g}" for p in game.points)
-    rules = f"""# No Limit regional - rules (practice event)
+    kit = os.path.join(ROOT, "sim", "kit")
+    os.makedirs(ws, exist_ok=True)
+    if not os.path.exists(os.path.join(ws, "agent.py")):
+        shutil.copy(os.path.join(kit, "agent.py"), os.path.join(ws, "agent.py"))
+    shutil.copytree(os.path.join(kit, "examples"), os.path.join(ws, "examples"), dirs_exist_ok=True)
+    shutil.copytree(os.path.join(kit, "hand-history"), os.path.join(ws, "hand-history"), dirs_exist_ok=True)
+    sdk = os.path.join(ws, "sdk")
+    ign = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copytree(os.path.join(ROOT, "poker_agent_sdk"), os.path.join(sdk, "poker_agent_sdk"), dirs_exist_ok=True, ignore=ign)
+    shutil.copytree(os.path.join(ROOT, "engine"), os.path.join(sdk, "engine"), dirs_exist_ok=True, ignore=ign)
+    shutil.copy(os.path.join(kit, "icm.py"), os.path.join(sdk, "icm.py"))
+    pts = [float(p) for p in game.points]
+    with open(os.path.join(sdk, "payouts.json"), "w") as f:
+        json.dump({"points_by_place": pts, "note": "Default table payouts. A round may draw payouts per table: "
+                   "read state.config.payouts. At the hand cap, survivors split the remaining points by ICM."}, f, indent=1)
+    with open(os.path.join(sdk, "blinds.json"), "w") as f:
+        json.dump({"starting_stack": 2000, "hands_per_level": C.HANDS_PER_LEVEL, "hand_cap": C.HAND_CAP,
+                   "levels": [{"level": k + 1, "hands": f"{C.HANDS_PER_LEVEL * k + 1}-{C.HANDS_PER_LEVEL * (k + 1)}",
+                               "small_blind": sb, "big_blind": bb} for k, (sb, bb) in enumerate(DEFAULT_BLINDS)],
+                   "note": "10/20 rising every 20 hands (format page). The exact levels after 10/20 are a "
+                           "stand-in until the real kit; read state.config.blinds."}, f, indent=1)
+    launcher = os.path.join(ws, "poker-agent")
+    with open(launcher, "w") as f:
+        f.write('#!/bin/sh\nDIR="$(cd "$(dirname "$0")" && pwd)"\n'
+                'PYTHONPATH="$DIR/sdk:$PYTHONPATH" exec python3 -m poker_agent_sdk "$@"\n')
+    os.chmod(launcher, 0o755)
+    with open(os.path.join(ws, "requirements.txt"), "w") as f:
+        f.write("# What the competition machines install (Python 3.12). poker_engine and pokerkit exist only locally.\n"
+                "numpy\nscipy\npandas\nscikit-learn\ntorch  # CPU\nlightgbm\nxgboost\nonnxruntime\nnumba\neval7\n")
+    p = ", ".join(f"{x:g}" for x in pts[:3])
+    rules = f"""# Variant: {v.name}
 
-## Format
-- 60-minute build phase. An unscored practice round runs every 10 minutes (minutes 10, 20, 30,
-  40, 50). After each one you can download your hand history and everyone's results.
-- Then six scored rounds, 20 minutes apart (minutes 60, 80, 100, 120, 140, 160).
-  Later rounds weigh more: round k counts k times (1..6). Score = sum of weight x average points.
-- At the start of every round (practice or scored) your current submission is frozen and used
-  for that whole round. You can keep improving between rounds.
-
-## Submissions
-- One Python file defining `class Agent` (see `api.py` and `bot.py`). Standard library only.
-- At most 100 MB. One accepted submission per 5 minutes. A rejected file does not use your slot.
-- If you have not submitted anything when a round starts, the starter example bot plays for you.
-
-## Each round
-- Many 8-bot sit-and-go tables ({game.practice_iterations} per practice round,
-  {game.scored_iterations} per scored round). Bots are randomly seated.
-- 2,000 chips each. Blinds start at 10/20 and go up every 25 hands
-  (10/20, 15/30, 25/50, 40/80, 60/120, 100/200, 150/300, 250/500).
-- A table ends when one bot has all the chips, or after 200 hands. At the cap the remaining
-  places are paid by ICM on the surviving stacks.
-- Points by finishing place (1st..8th): {pts}.
-- Your bot's state resets at the start of every table. Opponents are anonymous (seat numbers).
-
-## Bot limits
-- 1 ms per decision (act, discard, reveal and the other callbacks). If your bot errors or runs
-  over, it automatically checks if it can, otherwise folds.
-- No network access.
-
-## Variant: {v.name}
 {v.description}
-Your bot answers `discard(obs)` (which card to throw away face down) and then `reveal(obs)`
-(which of the two remaining cards to show face up). Opponents' face-up cards are visible in
-`obs.players[seat].up_cards`. A bot without `reveal()` shows its lowest card.
 
-## Downloads after each round (downloads/<round>/)
-- `results.json`: every team's average points, win rate, top-3 rate and place for the round.
-- `my_bot_stats.json`: your bot's decisions, timeouts, errors and decision times.
-- `hand_history.jsonl`: one JSON object per hand from your seat (your cards, discards,
-  everyone's face-up cards, every action, board, showdowns, chip changes).
+## How it plays through the SDK
+- Phases: `state.phase` is "betting", or "discard" / "reveal" at the decision point.
+- Discard: return `Action("discard", cards=[card])`; reveal: `Action("reveal", cards=[card])`.
+  `state.legal_actions[0].min_amount` is how many cards to choose. Your choices must be from
+  `state.variant["down_cards"]`. A failed choice plays the automatic choice (your lowest card).
+- Everyone's face-up cards: `state.variant["up_cards"]` ({{seat: [cards]}}) and reveal events.
+- The face-up card still plays in your hand: best 5 cards from your 2 cards plus the 5 board cards.
 
-## Starter kit files
-- `bot.py` / `kit_example_bot.py`: the agent template. `api.py`: the full interface.
-- `payouts.json`: points for each finishing place at a table.
-- `blinds.json`: the blind schedule (levels, hands per level, starting stack, hand limit).
-- `icm.py`: the ICM calculator used to score tables that reach the hand limit
-  (`icm(stacks, payouts)` -> expected points; `place_probabilities(stacks)`).
-- Local simulator: `local_test` (or `python -m sim.localtest bot.py` from the repository) plays
-  your bot for a few tables against sample bots under the real time limit and reports places,
-  crashes, timeouts and decision times.
+## Table defaults (state.config holds each table's actual settings)
+- 8 players, 2,000 chips, blinds 10/20 rising every {C.HANDS_PER_LEVEL} hands, hand cap {C.HAND_CAP}.
+- Points by place: {p} for 1st-3rd, 0 otherwise. At the hand cap, survivors split the
+  remaining points by ICM on their stacks (sdk/icm.py). Several busts in one hand: the bot with
+  more chips at the start of the hand places higher.
+- 1 ms per decision; overruns draw on a 100 ms bank per table (a timeout empties it). A timeout,
+  exception or illegal action checks when free, otherwise folds.
+- Memory starts as b"" at every table (64 KB max); opponents have anonymized seat IDs.
+
+## Schedule
+- Build for 60 minutes. Practice runs (~{game.practice_iterations:,} iterations) every 10 minutes;
+  practice never counts.
+- Six scored rounds, starting 20 minutes apart from the end of the build, weights 1x..6x;
+  at least {game.scored_iterations:,} iterations each. Each round snapshots every team's active bot at
+  its start; a team without an active bot forfeits that round (0 points).
 """
     with open(os.path.join(ws, "RULES.md"), "w") as f:
         f.write(rules)
-    with open(os.path.join(ws, "api.py"), "w") as f:
-        f.write(api_doc)
-    with open(os.path.join(ws, "kit_example_bot.py"), "w") as f:
-        f.write(template)
-    shutil.copy(os.path.join(ROOT, "sim", "kit", "icm.py"), os.path.join(ws, "icm.py"))
-    with open(os.path.join(ws, "payouts.json"), "w") as f:
-        json.dump({"points_by_place": [float(p) for p in game.points],
-                   "places": {str(k + 1): float(p) for k, p in enumerate(game.points)},
-                   "note": "Points for finishing 1st..8th at a table. If a table reaches the hand limit, the "
-                           "surviving bots split the remaining places by ICM (see icm.py)."}, f, indent=1)
-    with open(os.path.join(ws, "blinds.json"), "w") as f:
-        json.dump({"starting_stack": 2000, "hands_per_level": 25, "max_hands": 200,
-                   "levels": [{"level": k + 1, "hands": f"{25 * k + 1}-{25 * (k + 1)}", "small_blind": sb,
-                               "big_blind": bb} for k, (sb, bb) in enumerate(DEFAULT_BLINDS)],
-                   "note": "Blinds go up every 25 hands; the last level repeats if a table runs longer."}, f, indent=1)
-    if not os.path.exists(os.path.join(ws, "bot.py")):
-        with open(os.path.join(ws, "bot.py"), "w") as f:
-            f.write(template)
+    readme = """# Starter kit (practice-event mock)
+
+## Setup
+Python 3.12 recommended. The local simulator needs only the standard library:
+
+    ./poker-agent play agent.py                # 10 local tables vs examples/ (100 ms bank)
+    ./poker-agent check agent.py               # the upload test match (1 ms, no bank)
+    ./poker-agent pack mybot/ mybot.zip        # zip a bot folder reproducibly, then check it
+
+(or `PYTHONPATH=sdk python3 -m poker_agent_sdk play agent.py`)
+
+## Writing a bot
+Edit `agent.py`: `act(self, state, memory)` returns `(Action, memory_bytes)`. See the docstring
+in `sdk/poker_agent_sdk/__init__.py` for every field of `state`. Don't keep state on `self` or in
+globals between calls; per-table state goes in `memory`. Load anything heavy at import.
+
+## Uploading
+Upload `agent.py`, or a zip with `agent.py` at its root plus the files it reads. Limits: 50 MB
+uploaded, 200 MB unpacked, 1,000 archive entries, 1 MB of code in agent.py, paths up to 512
+characters and 16 levels. One upload every 30 seconds. Each upload plays a heads-up test match
+(up to 20 hands vs check-or-fold, 1 ms, no bank); it is rejected if it doesn't start, crashes,
+or fails more than 10% of its decisions. A passing upload becomes your active bot automatically;
+you can pick an earlier one on your team page.
+
+## Hand-history format
+Downloads are gzipped JSON lines, one hand per line, from your seat: `hand`, `blinds`
+([sb, bb, ante]), `button`, `my_seat`, `seats` (seat, name, stack at the start of the hand),
+`my_cards` (dealt), `my_discards`, `my_final_cards`, `up_cards` ({seat: cards}), `actions`
+([seat, action, amount_to, street]), `board`, `showdown` ({seat: cards}, only cards made
+public), `winners` ({seat: chips}), `deltas` (chip change per seat), `eliminated`, plus the
+table's `round`, `table`, `my_place`, `my_points`. See `hand-history/sample.jsonl.gz` and
+`hand-history/reader.py`.
+"""
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write(readme)
+    agents_md = """# Instructions for AI coding assistants
+
+- The bot is `agent.py`: class Agent(poker_agent_sdk.Agent) with act(self, state, memory) ->
+  (Action, bytes). Read RULES.md for the variant and README.md for limits.
+- Every decision must return within 1 ms (state.config.decision_ms). Precompute at import.
+- Never rely on self or globals between calls; keep per-table state in memory (bytes, 64 KB).
+- Only return actions offered in state.legal_actions; raise_to totals must be within
+  min_amount..max_amount (not clamped).
+- Allowed libraries: the standard library, poker_agent_sdk and requirements.txt. No network.
+- Before uploading run `./poker-agent check agent.py`; for strength run `./poker-agent play agent.py`.
+"""
+    for fn in ("AGENTS.md", "CLAUDE.md"):
+        with open(os.path.join(ws, fn), "w") as f:
+            f.write(agents_md)
     if not os.path.exists(os.path.join(ws, "NOTES.md")):
         with open(os.path.join(ws, "NOTES.md"), "w") as f:
             f.write("# Team notes\n\n(keep track of what you tried and what happened)\n")

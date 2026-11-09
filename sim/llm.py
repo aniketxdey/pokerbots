@@ -85,22 +85,12 @@ class MockLLM:
         if n_tool == 0:
             calls = [("list_files", {"path": "."})]
         elif n_tool == 1:
-            calls = [("read_file", {"path": "bot.py"})]
+            calls = [("read_file", {"path": "agent.py"})]
         elif n_tool == 2:
-            src = None
-            for m in reversed(messages):
-                if m.get("role") == "tool" and "class Agent" in str(m.get("content", "")):
-                    src = re.sub(r"^\s*\d+\|", "", m["content"], flags=re.M)
-                    break
-            if src is None or "class Agent" not in src:
-                src = open_template()
             thr = round(self.rng.uniform(0.35, 0.75), 2)
-            src = re.sub(r"THRESHOLD = [0-9.]+", f"THRESHOLD = {thr}", src)
-            if "THRESHOLD =" not in src:
-                src = src.replace("class Agent", f"THRESHOLD = {thr}\n\n\nclass Agent", 1)
-            calls = [("write_file", {"path": "bot.py", "content": src})]
+            calls = [("write_file", {"path": "agent.py", "content": open_template().replace("THRESHOLD = 0.5", f"THRESHOLD = {thr}")})]
         elif n_tool == 3:
-            calls = [("submit", {"path": "bot.py"})]
+            calls = [("submit", {"path": "agent.py"})]
         if calls:
             msg = {"role": "assistant", "content": "", "tool_calls": [
                 {"id": f"call_{n_tool}_{i}", "type": "function",
@@ -114,16 +104,25 @@ class MockLLM:
 
 def open_template():
     return (
-        "THRESHOLD = 0.5\n\n\n"
-        "class Agent:\n"
-        "    def act(self, obs):\n"
-        "        ranks = '23456789TJQKA'\n"
-        "        s = sum(ranks.index(c[0]) for c in obs.hole_cards) / (12.0 * max(1, len(obs.hole_cards)))\n"
-        "        if s >= THRESHOLD and 'raise' in obs.legal_actions:\n"
-        "            return ('raise', obs.min_raise_to)\n"
-        "        if obs.to_call == 0:\n"
-        "            return 'check'\n"
-        "        return 'call' if s >= THRESHOLD - 0.1 else 'fold'\n"
+        "import poker_agent_sdk\n"
+        "from poker_agent_sdk import Action\n\n"
+        "THRESHOLD = 0.5\n"
+        "RANKS = '23456789TJQKA'\n\n\n"
+        "class Agent(poker_agent_sdk.Agent):\n"
+        "    def act(self, state, memory):\n"
+        "        if state.phase in ('discard', 'reveal'):\n"
+        "            n = state.legal_actions[0].min_amount\n"
+        "            cards = sorted(state.variant['down_cards'], key=lambda c: RANKS.index(c[0]))\n"
+        "            return Action(state.phase, cards=cards[:n]), memory\n"
+        "        s = sum(RANKS.index(c[0]) for c in state.cards) / (12.0 * max(1, len(state.cards)))\n"
+        "        r = state.can('raise')\n"
+        "        if s >= THRESHOLD and r:\n"
+        "            return Action.raise_to(r.min_amount), memory\n"
+        "        if state.can('check'):\n"
+        "            return Action.check(), memory\n"
+        "        if s >= THRESHOLD - 0.1 and state.can('call'):\n"
+        "            return Action.call(), memory\n"
+        "        return Action.fold(), memory\n"
     )
 
 

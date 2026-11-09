@@ -45,8 +45,13 @@ BUILD_MINUTES = 60
 PRACTICE_EVERY = 10
 SCORED_ROUNDS = 6
 SCORED_GAP = 20
-SUBMIT_COOLDOWN_S = 300          # one submission per 5 minutes
-MAX_BOT_BYTES = 100 * 1024 * 1024
+UPLOAD_COOLDOWN_S = 30           # "Your team can upload once every 30 seconds"
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+HAND_CAP = 250                   # Boston format page
+HANDS_PER_LEVEL = 20
+TIME_BANK_MS = 100.0             # per-table bank for decision overruns
+SCORED_ITERATIONS = 5000         # "at least 5,000 iterations"
+PRACTICE_ITERATIONS = 1000       # "about 1,000 iterations every 10 minutes"
 
 # Each rival team prompts its AI differently, as real teams do. Personas only set the team's
 # starting instructions; every team gets the same rules, starter kit and data.

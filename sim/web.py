@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, request, send_file, send_from_directory, a
 
 from . import config as C
 from .agent import RivalAgent
-from .game import Game, HUMAN_ID, RUNS_DIR, total_spend, run_local_test, kill_all_procs
+from .game import Game, HUMAN_ID, RUNS_DIR, total_spend, kill_all_procs
 
 bp = Blueprint("sim", __name__)
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -35,7 +35,7 @@ def defaults():
         "variants": [{"id": v.id, "name": v.name, "description": v.description} for v in V
                      if v.id.startswith("sf2026")],
         "points_presets": POINT_PRESETS, "prices": C.PRICES,
-        "practice_iterations": 1000, "scored_iterations": 10000, "speed": 1,
+        "practice_iterations": 1000, "scored_iterations": 5000, "speed": 1,
         "spend_all_time": total_spend(),
     })
 
@@ -53,7 +53,7 @@ def new_game():
             "variant": s.get("variant") or "sf2026_reveal",
             "points": [float(x) for x in (s.get("points") or [50, 30, 20, 0, 0, 0, 0, 0])][:8],
             "practice_iterations": max(10, int(s.get("practice_iterations", 1000))),
-            "scored_iterations": max(10, int(s.get("scored_iterations", 10000))),
+            "scored_iterations": max(10, int(s.get("scored_iterations", 5000))),
             "speed": max(0.1, min(120.0, float(s.get("speed", 1)))),
             "model": s.get("model") or C.DEFAULT_MODEL,
             "base_url": s.get("base_url") or C.DEFAULT_BASE_URL,
@@ -126,26 +126,49 @@ def submit():
     data = _source_from_request()
     if data is None:
         return jsonify({"ok": False, "problem": "no file"}), 400
-    return jsonify(g.submit(HUMAN_ID, data))
+    name = request.files["file"].filename if "file" in request.files else "agent.py"
+    return jsonify(g.submit(HUMAN_ID, data, name or "agent.py"))
+
+
+@bp.post("/api/sim/activate")
+def activate():
+    g = game()
+    if g is None:
+        return jsonify({"ok": False, "problem": "no game running"}), 400
+    return jsonify(g.set_active(HUMAN_ID, (request.get_json(force=True) or {}).get("version")))
 
 
 @bp.post("/api/sim/localtest")
 def localtest():
+    """`poker-agent play`: a few local tables vs the kit's examples (100 ms bank), plus `check`."""
     g = game()
-    if g is None:
-        return jsonify({"ok": False, "problem": "no game running"}), 400
+    variant = g.variant if g else (request.args.get("variant") or "sf2026_reveal")
     data = _source_from_request()
     if data is None:
         return jsonify({"ok": False, "problem": "no file"}), 400
-    p = os.path.join(g.workspace(g.team(HUMAN_ID)), "_localtest_bot.py")
+    import tempfile
+    from .game import run_proc
+    import sys as _sys
+    d = tempfile.mkdtemp(prefix="localtest_")
+    is_zip = data[:4] == b"PK\x03\x04"
+    p = os.path.join(d, "upload.zip" if is_zip else "agent.py")
     with open(p, "wb") as f:
         f.write(data)
-    return jsonify(run_local_test(p, g.variant, 3))
+    out = {}
+    for cmd in ("check", "play"):
+        args = [_sys.executable, "-m", "poker_agent_sdk", cmd, p, "--variant", variant] + (["--tables", "5"] if cmd == "play" else [])
+        try:
+            code, so, se = run_proc(args, ROOT, 300)
+            out[cmd] = json.loads(so) if so.strip() else {"ok": False, "problem": se[-400:]}
+        except Exception as e:
+            out[cmd] = {"ok": False, "problem": str(e)}
+    return jsonify(out)
 
 
 def _source_from_request():
     if "file" in request.files:
-        return request.files["file"].read()
+        f = request.files["file"]
+        return f.read()
     body = request.get_json(silent=True) or {}
     src = body.get("source")
     return src.encode("utf-8") if src else None
@@ -184,14 +207,22 @@ def kit():
         a = request.args
         pts = [float(x) for x in (a.get("points") or "50,30,20,0,0,0,0,0").split(",") if x.strip()]
         spec = KitSpec(a.get("variant") or "sf2026_reveal", (pts + [0.0] * 8)[:8],
-                       int(a.get("practice_iterations") or 1000), int(a.get("scored_iterations") or 10000))
+                       int(a.get("practice_iterations") or 1000), int(a.get("scored_iterations") or 5000))
     with tempfile.TemporaryDirectory() as d:
         write_starter_kit(d, spec)
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for fn in ("RULES.md", "api.py", "kit_example_bot.py", "icm.py", "payouts.json", "blinds.json"):
-                z.write(os.path.join(d, fn), "starter_kit/" + fn)
-            z.write(os.path.join(ROOT, "sim", "localtest.py"), "starter_kit/local_simulator.py")
+            for root, dirs, files in os.walk(d):
+                dirs[:] = sorted(x for x in dirs if x != "__pycache__")
+                for fn in sorted(files):
+                    if fn == "NOTES.md" or fn.endswith(".pyc"):
+                        continue
+                    full = os.path.join(root, fn)
+                    info = zipfile.ZipInfo("starter_kit/" + os.path.relpath(full, d).replace(os.sep, "/"))
+                    info.external_attr = (0o755 if fn == "poker-agent" else 0o644) << 16
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    with open(full, "rb") as f:
+                        z.writestr(info, f.read())
     buf.seek(0)
     return send_file(buf, as_attachment=True, download_name="starter_kit.zip", mimetype="application/zip")
 

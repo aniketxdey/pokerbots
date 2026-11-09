@@ -99,8 +99,8 @@
     <div class="row">
       <div><label>Points by place (1st..8th)</label><input id="points" value="50, 30, 20, 0, 0, 0, 0, 0"></div>
       <div><label>Tables per practice round</label><input id="practice_iterations" type="number" value="1000"></div>
-      <div><label>Tables per scored round</label><input id="scored_iterations" type="number" value="10000">
-        <div class="hint">Official: 10,000. Lower it if your machine can't finish a round in 10 minutes.</div></div>
+      <div><label>Tables per scored round</label><input id="scored_iterations" type="number" value="5000">
+        <div class="hint">Official: at least 5,000. Rounds always run to completion.</div></div>
     </div>
     <div class="row">
       <div><label>Parallel model requests</label><input id="concurrency" type="number" min="1" max="10" value="3">
@@ -136,17 +136,17 @@
   <section class="card">
     <h2>Your submission</h2>
     <div id="cooldown" class="hint"></div>
-    <label>Bot file (.py, one file, standard library only, ≤ 100 MB)</label>
-    <input type="file" id="botFile" accept=".py">
+    <label>agent.py, or a .zip with agent.py at its root (≤ 50 MB)</label>
+    <input type="file" id="botFile" accept=".py,.zip">
     <label>…or paste the code</label>
-    <textarea id="botSrc" rows="6" placeholder="class Agent:&#10;    def act(self, obs): ..."></textarea>
+    <textarea id="botSrc" rows="6" placeholder="class Agent(poker_agent_sdk.Agent):&#10;    def act(self, state, memory): ..."></textarea>
     <div class="btns">
       <button class="primary" id="submitBtn">Submit</button>
-      <button id="testBtn">Local test (3 tables)</button>
+      <button id="testBtn">Local test (check + 5 tables)</button>
       <button class="kitBtn">⬇ Starter kit</button>
     </div>
     <div id="submitMsg" class="hint" style="font-size:13px"></div>
-    <table style="margin-top:8px"><thead><tr><th>#</th><th>Event time</th><th>Size</th><th>Status</th></tr></thead><tbody id="subs"></tbody></table>
+    <table style="margin-top:8px"><thead><tr><th>#</th><th>Event time</th><th>Size</th><th>Status</th><th></th></tr></thead><tbody id="subs"></tbody></table>
   </section>
   <section class="card">
     <h2>Your downloads</h2>
@@ -161,7 +161,8 @@
   </section>
   <section class="card">
     <h2>Latest round: <span id="lastLbl">—</span></h2>
-    <table><thead><tr><th>#</th><th>Team</th><th>Ver.</th><th class="n">Avg pts</th><th class="n">Win %</th><th class="n">Top 3 %</th></tr></thead><tbody id="last"></tbody></table>
+    <table><thead><tr><th>#</th><th>Team</th><th>Ver.</th><th class="n">Avg pts</th><th>Finishes 1st … 8th (% of tables)</th></tr></thead><tbody id="last"></tbody></table>
+    <div class="hint" id="forfeitLbl"></div>
   </section>
 </div>
 </div>
@@ -272,18 +273,29 @@ async function sendBot(url) {
   return await (await fetch(url, opts)).json();
 }
 $('submitBtn').onclick = async () => {
+  $('submitMsg').textContent = 'Uploading and running the test match…';
   const r = await sendBot('/api/sim/submit'); if (!r) return;
-  $('submitMsg').innerHTML = r.ok ? `<span class="ok">Accepted as v${r.version}. It plays from the next round.</span>` : `<span class="bad">Rejected: ${esc(r.problem)}</span>`;
+  $('submitMsg').innerHTML = r.ok ? `<span class="ok">v${r.version} passed its test match and is now your active bot (from the next round).</span>` : `<span class="bad">${r.version ? 'v' + r.version + ' rejected' : 'Not uploaded'}: ${esc(r.problem)}</span>`;
   poll();
 };
+async function makeActive(n) {
+  const r = await (await fetch('/api/sim/activate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({version: n})})).json();
+  $('submitMsg').innerHTML = r.ok ? `<span class="ok">v${r.version} is now active (from the next round).</span>` : `<span class="bad">${esc(r.problem)}</span>`;
+  poll();
+}
 $('testBtn').onclick = async () => {
-  $('submitMsg').textContent = 'Running local test…';
+  $('submitMsg').textContent = 'Running poker-agent check and play…';
   const r = await sendBot('/api/sim/localtest'); if (!r) return;
-  if (!r.ok) { $('submitMsg').innerHTML = `<span class="bad">${esc(r.problem)}</span>`; return; }
-  const places = r.tables.map(t => t.place).join(', ');
-  $('submitMsg').innerHTML = `Places: ${places} · decisions ${r.decisions} · <span class="${r.timeouts ? 'bad':'ok'}">timeouts ${r.timeouts}</span> · `
-    + `<span class="${r.errors ? 'bad':'ok'}">errors ${r.errors}</span> · avg ${r.avg_ms} ms, max ${r.max_ms} ms`
-    + (r.error_samples.length ? `<br><span class="bad">${esc(r.error_samples[0])}</span>` : '');
+  const c = r.check || {}, p = r.play || {};
+  let h = `<b>check</b> (upload test match): ${c.ok ? '<span class="ok">pass</span>' : '<span class="bad">fail — ' + esc(c.problem || '') + '</span>'}`;
+  if (c.log) h += `<div class="hint">${esc(c.log.join(' · '))}</div>`;
+  if (p.ok) {
+    h += `<br><b>play</b> (5 tables vs examples, 100 ms bank): places ${p.tables.map(t => t.place).join(', ')} · avg ${p.avg_points.toFixed(1)} pts · decisions ${p.decisions} · `
+      + `<span class="${p.timeouts ? 'bad':'ok'}">timeouts ${p.timeouts}</span> · <span class="${p.errors ? 'bad':'ok'}">errors ${p.errors}</span> · `
+      + `<span class="${p.illegal ? 'bad':'ok'}">illegal ${p.illegal}</span> · avg ${p.avg_ms} ms, max ${p.max_ms} ms`
+      + (p.error_samples && p.error_samples.length ? `<br><span class="bad">${esc(p.error_samples[0])}</span>` : '');
+  } else if (p.problem) h += `<br><b>play</b>: <span class="bad">${esc(p.problem)}</span>`;
+  $('submitMsg').innerHTML = h;
 };
 
 async function poll() {
@@ -312,19 +324,25 @@ async function poll() {
     + `${e.kind === 'practice' ? 'P' + e.n : 'R' + e.n} · ${mmss(e.at)}</span>`).join('');
   // my submissions
   const me = s.teams.find(t => t.id === 'you');
-  $('cooldown').innerHTML = me.cooldown_s > 0 ? `<span class="warn">Next submission allowed in ${mmss(me.cooldown_s)} (event time)</span>` : '<span class="ok">You can submit now.</span>';
-  $('subs').innerHTML = me.submissions.slice().reverse().map(x => `<tr><td>v${x.n}</td><td>${mmss(x.t)}</td><td>${(x.bytes/1024).toFixed(1)} KB</td>`
-    + `<td>${x.ok ? '<span class="ok">accepted</span>' : '<span class="bad">' + esc(x.problem) + '</span>'}</td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">Nothing submitted yet — the starter example bot plays for you until you do.</td></tr>';
+  $('cooldown').innerHTML = (me.cooldown_s > 0 ? `<span class="warn">Next upload allowed in ${Math.ceil(me.cooldown_s)} s (event time)</span>` : '<span class="ok">You can upload now.</span>')
+    + (me.active ? ` · active bot: <b>v${me.active}</b>` : ' · <span class="bad">no active bot — you forfeit rounds until an upload passes</span>');
+  const badge = st => ({active: '<span class="ok"><b>active</b></span>', ready: '<span class="muted">ready</span>',
+    testing: '<span class="warn">testing…</span>', rejected: '<span class="bad">rejected</span>'})[st] || esc(st);
+  $('subs').innerHTML = me.submissions.slice().reverse().map(x => `<tr><td>v${x.n}</td><td>${mmss(x.t)}</td><td>${(x.bytes/1024).toFixed(1)} KB ${x.kind === 'zip' ? 'zip' : ''}</td>`
+    + `<td>${badge(x.status)}${x.problem ? '<div class="hint bad">' + esc(x.problem) + '</div>' : ''}`
+    + (x.log && x.log.length ? `<details><summary class="hint">validation log</summary><pre>${esc(x.log.join('\n'))}</pre></details>` : '') + '</td>'
+    + `<td>${x.status === 'ready' && !s.finished ? `<button onclick="makeActive(${x.n})">Make active</button>` : ''}</td></tr>`).join('')
+    || '<tr><td colspan="5" class="muted">Nothing uploaded yet — without an active bot you forfeit each round.</td></tr>';
   // boards
   $('board').innerHTML = s.leaderboard.map(r => `<tr class="${r.id === 'you' ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td class="n">${r.weighted.toFixed(2)}</td>`
     + `<td class="muted">${Object.entries(r.per_round).map(([k,v]) => 'R' + k + ' ' + v).join(' · ')}</td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">Starts with scored round 1 (minute 60).</td></tr>';
   const lr = s.rounds[s.rounds.length - 1];
   $('lastLbl').innerHTML = lr ? esc(lr.label) + ` <span class="muted" style="text-transform:none">· ${lr.iterations.toLocaleString()} tables`
-    + (lr.cut_short ? ` <span class="warn">(cut short: planned ${lr.planned.toLocaleString()})</span>` : '') + '</span>' : '—';
+    + '</span>' : '—';
   $('last').innerHTML = lr ? lr.results.map(r => `<tr class="${r.team === me.name ? 'me' : ''}"><td>${r.rank}</td><td>${esc(r.team)}</td><td>v${r.version}</td>`
-    + `<td class="n">${r.avg_points.toFixed(2)}</td><td class="n">${(100*r.win_rate).toFixed(1)}</td><td class="n">${(100*r.top3_rate).toFixed(1)}</td></tr>`).join('') : '';
+    + `<td class="n">${r.avg_points.toFixed(2)}</td><td class="muted" style="font-variant-numeric:tabular-nums">${(r.finishes || []).map(f => (100*f).toFixed(0)).join(' · ')}</td></tr>`).join('') : '';
+  $('forfeitLbl').textContent = lr && lr.forfeits && lr.forfeits.length ? 'Forfeited (no active bot): ' + lr.forfeits.join(', ') : '';
   // agents
   $('agents').innerHTML = s.agents.map(a => `<tr><td><b>${esc(a.name)}</b></td><td class="st-${a.status}">${esc(a.status)}<div class="hint">${esc(a.detail)}</div></td>`
     + `<td class="n">${a.iterations}</td><td class="n">${a.steps}</td><td class="n">${a.submissions}</td>`
@@ -367,41 +385,42 @@ function renderRules(s) {
       <li>Decision point — ${esc(timing)}: every player still in the hand <b>discards 1 card face down</b>, <b>keeps 1 hidden</b> and <b>turns 1 face up</b> for the whole table.</li>
       <li>The face-up card still plays in your hand, like a stud up card. You make the best 5-card hand from your 2 cards and the 5 shared cards.</li>
       <li>Everyone chooses at the same time, so nobody sees another reveal before choosing.</li>
-      <li>Bots answer <code>discard(obs)</code>, then <code>reveal(obs)</code>; opponents' face-up cards are in <code>obs.players[seat].up_cards</code>. A bot without <code>reveal()</code> shows its lowest card.</li>
-      <li class="muted">Unconfirmed on the real day: the exact timing, and whether reveals happen at once or in seat order. Check the starter kit first.</li>
+      <li>In the SDK: <code>state.phase</code> is "discard" then "reveal"; answer with <code>Action("discard", cards=[…])</code> / <code>Action("reveal", cards=[…])</code>. Face-up cards: <code>state.variant["up_cards"]</code>. A failed choice shows your lowest card.</li>
+      <li class="muted">The real variant is announced at the start of the event; this one is our best guess at the Menlo Park game. The real kit's RULES.md defines its phases and action kinds.</li>
     </ul>
   </div>
   <div class="rules">
     <div>
       <h3>Schedule</h3>
       <ul>
-        <li>60-minute build phase. Unscored practice rounds at minutes 10, 20, 30, 40 and 50.</li>
-        <li>Then 6 scored rounds, 20 minutes apart (minutes 60, 80, 100, 120, 140, 160).</li>
-        <li>Each round uses the bot you had submitted when it started. Later edits count from the next round.</li>
-        <li>Score = weighted sum of average points per table: round 1 counts ×1, round 2 ×2 … round 6 ×6.</li>
+        <li>60-minute build after the variant is announced. Practice runs (~${pIt.toLocaleString()} iterations) every 10 minutes; practice never counts.</li>
+        <li>6 scored rounds, starting 20 minutes apart from the end of the build (minutes 60, 80 … 160). Each runs until all ${sIt.toLocaleString()}+ iterations finish: 20 minutes is the gap between starts, not a time limit, so results can arrive during the next window.</li>
+        <li>Each round snapshots every team's <b>active</b> bot at its start. <b>No active bot = forfeit</b> (0 points).</li>
+        <li>Final score = Σ round score × weight (1x … 6x). Ties: countback on weighted share of 1st places, then 2nd, …</li>
       </ul>
       <h3>Submissions</h3>
       <ul>
-        <li>One Python file defining <code>class Agent</code>. Standard library only. At most 100 MB.</li>
-        <li>One accepted submission per 5 minutes. Rejected files don't use the slot.</li>
-        <li>Until you submit, the starter example bot (check or fold) plays for you.</li>
+        <li>Upload <code>agent.py</code> (<code>act(state, memory)</code>) or a zip with agent.py at its root. 50 MB uploaded, 200 MB unpacked, 1,000 entries, 1 MB of code in agent.py.</li>
+        <li>One upload every 30 seconds. Each upload plays a heads-up test match (≤20 hands vs check-or-fold, 1 ms, no bank); rejected if it doesn't start, crashes or fails &gt;10% of decisions.</li>
+        <li>A passing upload becomes active automatically; you can switch back to an earlier one.</li>
+        <li>Libraries: standard library, the SDK, NumPy, SciPy, pandas, scikit-learn, PyTorch (CPU), LightGBM, XGBoost, ONNX Runtime, Numba, eval7.</li>
       </ul>
       <h3>After each round</h3>
-      <ul><li>Download results for every team, your bot's stats (timeouts, errors, speed) and your own hand history. Opponents appear as seat numbers.</li></ul>
+      <ul><li>Results for every team (average and finishes in every place), your bot's stats, and your hand history (gzipped JSON lines, opponents named).</li></ul>
     </div>
     <div>
       <h3>Tables</h3>
       <ul>
-        <li>8-bot sit-and-go, random seats. ${pIt.toLocaleString()} tables per practice round, ${sIt.toLocaleString()} per scored round.</li>
-        <li>2,000 chips each. Blinds 10/20, rising every 25 hands: 15/30, 25/50, 40/80, 60/120, 100/200, 150/300, 250/500.</li>
+        <li>8 players, seats randomized every iteration; every bot plays one table per iteration. Short tables are filled with bots not already seated, whose finishes never score.</li>
+        <li>2,000 chips each. Blinds 10/20, rising every <b>20 hands</b> (exact levels come in the real kit).</li>
         <li>No-limit betting.</li>
-        <li>A table ends when one bot has all the chips or after 200 hands. At 200 hands, the remaining places are paid by ICM (chip stacks → chance of each place).</li>
+        <li>A table ends when one bot has all the chips or at the <b>250-hand cap</b>, where survivors split the remaining points by ICM. Several busts in one hand: more chips at the start of the hand places higher.</li>
         <li>Points by finishing place: ${esc(paid || 'none set')}; everyone else 0.</li>
       </ul>
       <h3>Bot limits</h3>
       <ul>
-        <li><b>1 ms per decision</b> (act, discard, reveal and every callback). If a bot is late or crashes, it checks if it can, otherwise folds.</li>
-        <li>No network. Bot state resets at every table. Opponents are anonymous.</li>
+        <li><b>1 ms per decision</b>; overruns draw on a <b>100 ms bank</b> per table (a timeout empties it). A timeout, exception or illegal action (incl. a raise outside the range — not clamped) checks when free, otherwise folds.</li>
+        <li>Memory: <code>memory</code> bytes start empty at every table (64 KB max). Don't rely on <code>self</code>/globals between calls. No network or GPU. Opponents have anonymized seat IDs.</li>
       </ul>
     </div>
   </div>`;
