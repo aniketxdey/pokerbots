@@ -246,14 +246,14 @@ up to 40 tool calls per session. It keeps a `NOTES.md` as its memory between ses
 start an event; empty seats are filled with fixed house bots.
 
 **Model.** Rivals call any OpenAI-compatible endpoint; the default is Ollama with
-`glm-5.3:cloud` (Z.AI's agentic coding model; $1.40 in / $4.40 out per million tokens).
+`glm-5.3-flash:cloud` (Z.AI's fast agentic coding model; $0.15 in / $0.50 out per million tokens).
 `gpt-oss:120b-cloud` (OpenAI's open-weight model, $0.15 / $0.60) is a much cheaper option:
 type any model name in the setup form. Setup:
 
 ```bash
 # install Ollama from https://ollama.com, then:
 ollama signin
-ollama run glm-5.3:cloud           # first run registers the cloud model; type /bye to exit
+ollama run glm-5.3-flash:cloud     # first run registers the cloud model; type /bye to exit
 ```
 
 Ollama Free allows 1 request at a time, Pro ($20/month, $60 of usage included) 3, Max 10:

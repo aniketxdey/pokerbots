@@ -193,10 +193,18 @@ class RivalAgent:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         self._note("user", user)
         client = make_client(self.base_url, self.model, self.api_key)
+        nudged = False
         for step in range(MAX_STEPS):
             if g.stopped or self.stop:
                 self.status = "stopped"
                 return
+            if not nudged and self.team.active is None and step >= 6:
+                nudged = True
+                nxt = g.next_event()
+                left = _fmt_t(nxt["at"] - g.event_time()) if nxt else "?"
+                messages.append({"role": "user", "content":
+                                 f"Reminder: you still have NO active bot and the next round freezes in {left}. "
+                                 "Upload a legal agent.py now (poker_agent check, then submit), then keep improving."})
             self.detail = f"session {self.iterations}, step {step + 1}"
             self.status = "queued"
             with self.sem:

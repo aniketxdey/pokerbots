@@ -30,7 +30,7 @@ def is_out_of_credits(code, detail):
 
 
 class OpenAICompatible:
-    def __init__(self, base_url, model, api_key="", timeout=600):
+    def __init__(self, base_url, model, api_key="", timeout=180):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key

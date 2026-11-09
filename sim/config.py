@@ -3,7 +3,7 @@
 # Ollama exposes an OpenAI-compatible API. With the desktop app signed in, cloud models are
 # served through the local server; without it, use https://ollama.com/v1 plus an API key.
 DEFAULT_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_MODEL = "glm-5.3:cloud"
+DEFAULT_MODEL = "glm-5.3-flash:cloud"
 
 # USD per million tokens (input, cached input, output), from ollama.com/pricing as of
 # 2026-10-07. Prices change: edit here or in the UI. Unknown models fall back to "default".

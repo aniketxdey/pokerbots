@@ -286,10 +286,14 @@ class Game:
         worker.start()
         try:
             for e in self.schedule:
+                rescued = False
                 while self.event_time() < e["at"]:
                     if self.stopped:
                         q.put(None)
                         return
+                    if not rescued and e["at"] - self.event_time() <= 45:
+                        rescued = True
+                        self._rescue_ai_teams()
                     time.sleep(0.2)
                 if self.stopped:
                     q.put(None)
@@ -305,6 +309,22 @@ class Game:
         except Exception:
             self._log("ERROR in event loop: " + traceback.format_exc(limit=3))
             q.put(None)
+
+    def _rescue_ai_teams(self):
+        """Safety net for AI rivals: shortly before a freeze, an AI team with no active bot has its
+        current agent.py uploaded for it (the same upload rules and test match), the way a human
+        teammate would hit upload. Logged so it is visible."""
+        for t in self.teams:
+            if t.kind != "ai" or t.active is not None:
+                continue
+            p = os.path.join(self.workspace(t), "agent.py")
+            if not os.path.isfile(p):
+                continue
+            with open(p, "rb") as f:
+                data = f.read()
+            r = self.submit(t.id, data, "agent.py")
+            self._log(f"{t.name}: no active bot 45 s before the freeze - auto-uploaded its current agent.py "
+                      f"({'passed' if r.get('ok') else 'failed: ' + str(r.get('problem'))[:120]})")
 
     def _compute_loop(self, q):
         while True:
