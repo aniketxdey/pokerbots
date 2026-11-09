@@ -103,6 +103,13 @@ def reset():
     return jsonify({"ok": True, "killed_processes": killed})
 
 
+@bp.post("/api/sim/retry_agents")
+def retry_agents():
+    g = game()
+    n = sum(1 for a in (g.agents if g else []) if a.retry())
+    return jsonify({"ok": True, "retried": n})
+
+
 @bp.get("/api/sim/state")
 def state():
     g = game()

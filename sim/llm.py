@@ -14,6 +14,21 @@ class LLMError(Exception):
     pass
 
 
+class OutOfCreditsError(LLMError):
+    """The provider refused the request because the account's credits / usage limit ran out."""
+
+
+_CREDIT_WORDS = ("credit", "quota", "usage limit", "limit reached", "reached your", "exceeded your",
+                 "insufficient", "billing", "payment", "subscription", "upgrade", "balance", "plan limit")
+
+
+def is_out_of_credits(code, detail):
+    d = (detail or "").lower()
+    if code == 402:
+        return True
+    return code in (403, 429) and any(w in d for w in _CREDIT_WORDS)
+
+
 class OpenAICompatible:
     def __init__(self, base_url, model, api_key="", timeout=600):
         self.base_url = base_url.rstrip("/")
@@ -40,6 +55,8 @@ class OpenAICompatible:
             except urllib.error.HTTPError as e:
                 detail = e.read().decode(errors="replace")[:400]
                 last = f"HTTP {e.code}: {detail}"
+                if is_out_of_credits(e.code, detail):
+                    raise OutOfCreditsError(last)  # retrying won't help
                 if e.code in (429, 500, 502, 503, 504):
                     time.sleep(3 * (attempt + 1))
                     continue
@@ -59,6 +76,8 @@ class MockLLM:
         self.rng = random.Random(seed)
 
     def chat(self, messages, tools=None):
+        if self.model == "mock-nocredits":
+            raise OutOfCreditsError("HTTP 402: you have run out of credits (simulated)")
         n_tool = sum(1 for m in messages if m.get("role") == "tool")
         usage = {"prompt_tokens": sum(len(str(m.get("content", ""))) for m in messages) // 4,
                  "completion_tokens": 60}

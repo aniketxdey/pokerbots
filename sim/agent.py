@@ -16,7 +16,7 @@ import traceback
 
 from . import config as C
 from .game import add_spend, run_local_test, run_proc
-from .llm import LLMError, make_client
+from .llm import LLMError, OutOfCreditsError, make_client
 
 MAX_STEPS = 40            # tool calls per iteration (a long Codex-style session)
 READ_LIMIT = 400          # lines per read_file call
@@ -94,6 +94,7 @@ class RivalAgent:
         self.pending = []
         self.cv = threading.Condition()
         self.transcript = []      # [{t, role, text}]
+        self.blocked_event = None
         self.stop = False
         game.listeners.append(self.on_event)
         threading.Thread(target=self._run, daemon=True).start()
@@ -126,6 +127,13 @@ class RivalAgent:
                 return
             try:
                 self._iterate(ev)
+            except OutOfCreditsError as e:
+                self.status = "out_of_credits"
+                self.detail = str(e)[:300]
+                self.blocked_event = ev          # resumed by "Retry" once credits are added
+                self._note("system", "OUT OF CREDITS " + str(e))
+                self.game._log(f"{self.team.name}: model refused the request - out of credits / usage limit")
+                continue
             except Exception as e:
                 self.status = "error"
                 self.detail = f"{type(e).__name__}: {e}"
@@ -320,6 +328,20 @@ class RivalAgent:
     def _note(self, role, text):
         self.transcript.append({"t": round(self.game.event_time()), "role": role, "text": str(text)[:4000]})
         self.transcript = self.transcript[-400:]
+
+    def retry(self):
+        """Resume after credits were added: redo the session that was refused."""
+        if self.status != "out_of_credits":
+            return False
+        ev, self.blocked_event = self.blocked_event, None
+        self.status = "waiting"
+        self.detail = "retrying"
+        if ev is not None:
+            with self.cv:
+                if not self.pending:
+                    self.pending = [ev]
+                self.cv.notify()
+        return True
 
     def to_dict(self):
         return {"team": self.team.id, "name": self.team.name, "persona": self.team.persona, "status": self.status,
