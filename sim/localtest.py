@@ -69,7 +69,7 @@ def run(path, variant, tables, seed=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("path")
-    ap.add_argument("--variant", default="sf2026_reveal")
+    ap.add_argument("--variant", default="sf2026_reveal_preflop")
     ap.add_argument("--tables", type=int, default=3)
     a = ap.parse_args()
     try:

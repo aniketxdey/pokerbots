@@ -88,7 +88,18 @@ class MockLLM:
         usage = {"prompt_tokens": sum(len(str(m.get("content", ""))) for m in messages) // 4,
                  "completion_tokens": 60}
         calls = []
-        if n_tool == 0:
+        pilot = bool(tools) and any(t["function"]["name"] == "ab_test" for t in tools)
+        if pilot:
+            # manager session: copy agent.py to agent_b.py with a harmless change, A/B test, note, finish
+            seq = [("write_file", {"path": "_mock_copy.py",
+                                   "content": "import shutil\nshutil.copy('agent.py', 'agent_b.py')\n"}),
+                   ("run_python", {"path": "_mock_copy.py"}),
+                   ("ab_test", {"tables": 6}),
+                   ("edit_file", {"path": "NOTES.md", "old": "## A/B log\n",
+                                  "new": "## A/B log\n- mock: no-op change tested\n"}),
+                   ("finish", {"summary": "tested a no-op change"})]
+            calls = [seq[n_tool]] if n_tool < len(seq) else []
+        elif n_tool == 0:
             calls = [("list_files", {"path": "."})]
         elif n_tool == 1:
             calls = [("read_file", {"path": "agent.py"})]

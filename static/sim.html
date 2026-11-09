@@ -84,9 +84,25 @@
   <h2>New practice event</h2>
   <div class="row">
     <div><label>Your team</label><input id="team_name" value="Aniket & Mitch"></div>
-    <div><label>AI rival teams (0–7)</label><input id="rivals" type="number" min="0" max="7" value="7">
+    <div><label>Field</label><select id="field">
+        <option value="ai">AI rivals building from scratch</option>
+        <option value="pilots">Pilot strategies (a frozen set)</option></select></div>
+    <div class="aiOnly"><label>AI rival teams (0–7)</label><input id="rivals" type="number" min="0" max="7" value="7">
       <div class="hint">Empty seats are filled with house bots that don't change.</div></div>
     <div><label>Variant timing</label><select id="variant"></select></div>
+  </div>
+  <div class="row pilotOnly hidden">
+    <div><label>Pilot set</label><select id="pilot_set"></select>
+      <div class="hint">Each pilot is a team; its frozen original starts as active upload v1.</div></div>
+    <div><label>Static clones</label><input id="clones" type="number" min="0" max="8" value="2">
+      <div class="hint">Unchanged copies of pilots that never iterate (a baseline). 12 pilots + 2 clones + you = 15
+        entrants: one 8-seat table and one 7-seat table with a non-scoring filler. 3 clones = two full tables.</div></div>
+    <div><label>Clone which pilots (optional)</label><input id="clone_ids" placeholder="ids, comma separated; blank = random">
+    </div>
+    <div><label>Managers</label><input id="managers" type="number" min="0" max="12" value="3">
+      <div class="hint">Model agents that cycle through the pilots each round, A/B testing small changes. 0 = static pilots, no model spend.</div></div>
+    <div><label>A/B test tables</label><input id="ab_tables" type="number" min="4" max="100" value="30">
+      <div class="hint">Paired tables per A/B test (each played with A and with B).</div></div>
   </div>
   <div class="row">
     <div><label>Rival model</label><input id="model">
@@ -132,6 +148,21 @@
   </div>
 </section>
 
+
+<section class="card" id="pilotCard">
+  <h2>Pilot strategies</h2>
+  <div class="hint">Put the pilots in <code id="incomingDir">pilots/incoming/</code> (each an agent.py-style <code>.py</code>,
+    a zip with agent.py at its root, or a folder with agent.py), then freeze them as a named set. A frozen set is a
+    read-only copy with a test-match check per pilot; events only ever edit their own copies, so you can rerun from the
+    same originals any time.</div>
+  <div class="row" style="margin-top:8px">
+    <div><label>Waiting in incoming/</label><div id="incomingList" class="muted">—</div></div>
+    <div><label>Freeze as set</label><input id="freezeName" placeholder="e.g. night1">
+      <div class="btns" style="margin-top:6px"><button id="freezeBtn">Freeze</button> <span class="hint" id="freezeMsg"></span></div></div>
+  </div>
+  <table style="margin-top:8px"><thead><tr><th>Frozen set</th><th>Created</th><th>Pilots (test match)</th></tr></thead>
+    <tbody id="setList"></tbody></table>
+</section>
 
 <!-- ======================= live event ======================= -->
 <div id="live" class="hidden">
@@ -190,7 +221,7 @@
 </div>
 
 <section class="card">
-  <h2>AI rival agents</h2>
+  <h2>AI agents <span class="muted" style="text-transform:none" id="agentsSub"></span></h2>
   <table><thead><tr><th>Team</th><th>Status</th><th class="n">Sessions</th><th class="n">Tool calls</th><th class="n">Submits</th>
     <th class="n">Tokens in / out</th><th class="n">Cost</th><th>Last summary</th><th></th></tr></thead><tbody id="agents"></tbody></table>
 </section>
@@ -237,6 +268,9 @@ async function init() {
   $('model').value = D.model; $('base_url').value = D.base_url; $('concurrency').value = D.concurrency;
   if (D.has_openai_key) $('keyHint').textContent = 'OPENAI_API_KEY is set in the environment: leave blank to use it.';
   $('variant').innerHTML = D.variants.map(v => `<option value="${v.id}" title="${esc(v.description)}">${esc(v.name)}</option>`).join('');
+  if (D.variant) $('variant').value = D.variant;
+  $('field').onchange = fieldVis; fieldVis();
+  loadPilots();
   priceHint(); $('model').oninput = priceHint;
   ['variant','points','practice_iterations','scored_iterations','build_minutes','practice_every','scored_gap'].forEach(id => $(id).addEventListener('input', () => renderRules(null)));
   renderRules(null);
@@ -249,16 +283,47 @@ function priceHint() {
   $('priceHint').textContent = p ? `$${p[0]} in / $${p[2]} out per million tokens (cached in $${p[1]})` : 'price unknown: estimated at the default rate';
 }
 
+function fieldVis() {
+  const p = $('field').value === 'pilots';
+  document.querySelectorAll('.pilotOnly').forEach(e => e.classList.toggle('hidden', !p));
+  document.querySelectorAll('.aiOnly').forEach(e => e.classList.toggle('hidden', p));
+}
+async function loadPilots() {
+  const r = await (await fetch('/api/sim/pilots')).json();
+  $('incomingDir').textContent = r.incoming_dir + '/';
+  $('incomingList').innerHTML = r.incoming.length ? r.incoming.map(i => esc(i.source)).join(', ') + ` <b>(${r.incoming.length})</b>` : 'empty';
+  $('setList').innerHTML = r.sets.slice().reverse().map(st => `<tr><td><b>${esc(st.name)}</b></td><td class="muted">${esc(st.created)}</td><td>`
+    + st.pilots.map(p => `<span title="${esc(p.problem || (p.log || []).join(' | '))}" class="${p.ok ? '' : 'bad'}">${esc(p.id)}${p.ok ? '' : ' ✗'}</span>`).join(', ')
+    + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">No frozen sets yet.</td></tr>';
+  const cur = $('pilot_set').value;
+  $('pilot_set').innerHTML = r.sets.slice().reverse().map(st => `<option value="${esc(st.name)}">${esc(st.name)} (${st.pilots.filter(p => p.ok).length} pilots)</option>`).join('')
+    || '<option value="">(freeze a set first)</option>';
+  if (cur && r.sets.some(st => st.name === cur)) $('pilot_set').value = cur;
+}
+$('freezeBtn').onclick = async () => {
+  const name = $('freezeName').value.trim();
+  if (!name) { $('freezeMsg').textContent = 'name the set first'; return; }
+  $('freezeBtn').disabled = true; $('freezeMsg').textContent = 'checking each pilot…';
+  const r = await (await fetch('/api/sim/pilots/freeze', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, variant: $('variant').value})})).json();
+  $('freezeBtn').disabled = false;
+  $('freezeMsg').textContent = r.ok ? `frozen: ${r.set.pilots.filter(p => p.ok).length}/${r.set.pilots.length} passed the test match` : r.problem;
+  loadPilots();
+};
+
 $('startBtn').onclick = async () => {
   const body = { team_name: $('team_name').value, rivals: +$('rivals').value, variant: $('variant').value,
     model: $('model').value, base_url: $('base_url').value, api_key: $('api_key').value,
     points: $('points').value.split(/[ ,]+/).filter(Boolean).map(Number),
     practice_iterations: +$('practice_iterations').value, scored_iterations: +$('scored_iterations').value,
     concurrency: +$('concurrency').value, speed: +$('speed').value, workers: +$('workers').value,
-    full_history: $('full_history').value, history_sample: +$('history_sample').value, build_minutes: +$('build_minutes').value, practice_every: +$('practice_every').value, scored_gap: +$('scored_gap').value };
+    full_history: $('full_history').value, history_sample: +$('history_sample').value, build_minutes: +$('build_minutes').value, practice_every: +$('practice_every').value, scored_gap: +$('scored_gap').value,
+    field: $('field').value, pilot_set: $('pilot_set').value, clones: +$('clones').value, clone_ids: $('clone_ids').value,
+    managers: +$('managers').value, ab_tables: +$('ab_tables').value };
   $('startBtn').disabled = true;
-  await fetch('/api/sim/new', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  $('startBtn').disabled = false; wantForm = false; lastDl = ''; poll();
+  const res = await (await fetch('/api/sim/new', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})).json();
+  $('startBtn').disabled = false;
+  if (!res.ok) { alert(res.problem || 'could not start'); return; } wantForm = false; lastDl = ''; poll();
 };
 $('resetBtn').onclick = async () => {
   if (!confirm('Reset? This stops the round and every AI rival right now (no more model requests) and returns to setup.')) return;
@@ -336,6 +401,7 @@ async function poll() {
   $('resetBtn').classList.toggle('hidden', !s.id);
   creditAlert(s.id ? s : {agents: []});
   $('newCard').classList.toggle('hidden', !showForm);
+  $('pilotCard').classList.toggle('hidden', !showForm);
   D._live = !!(s.id && !s.finished);
   if (!s.id) { $('live').classList.add('hidden'); renderRules(null); return; }
   renderRules(showForm ? null : s);
@@ -373,11 +439,12 @@ async function poll() {
     + `<td class="n">${r.avg_points.toFixed(2)}</td><td class="muted" style="font-variant-numeric:tabular-nums">${(r.finishes || []).map(f => (100*f).toFixed(0)).join(' · ')}</td></tr>`).join('') : '';
   $('forfeitLbl').textContent = lr && lr.forfeits && lr.forfeits.length ? 'Forfeited (no active bot): ' + lr.forfeits.join(', ') : '';
   // agents
-  $('agents').innerHTML = s.agents.map(a => `<tr><td><b>${esc(a.name)}</b></td><td class="st-${a.status}">${esc(a.status)}<div class="hint">${esc(a.detail)}</div></td>`
+  $('agents').innerHTML = s.agents.map(a => `<tr><td><b>${esc(a.name)}</b>${a.manager ? '<div class="hint">' + esc(a.manager) + '</div>' : ''}</td><td class="st-${a.status}">${esc(a.status)}<div class="hint">${esc(a.detail)}</div></td>`
     + `<td class="n">${a.iterations}</td><td class="n">${a.steps}</td><td class="n">${a.submissions}</td>`
     + `<td class="n">${(a.tokens_in/1000).toFixed(0)}k / ${(a.tokens_out/1000).toFixed(0)}k</td><td class="n">${money(a.cost)}</td>`
     + `<td class="hint" style="max-width:320px">${esc(a.last_summary).slice(0,220)}</td><td><button onclick="openAgent('${a.team}')">View</button></td></tr>`).join('')
     || '<tr><td colspan="9" class="muted">No AI rivals in this event.</td></tr>';
+  $('agentsSub').textContent = s.field === 'pilots' ? `· pilot set ${s.pilot_set}: managers A/B testing their pilots` : '· rivals building from scratch';
   $('log').innerHTML = s.log.slice().reverse().map(l => `<div><span class="muted">${mmss(l.t)}</span> ${esc(l.msg)}</div>`).join('');
   // downloads (refresh when rounds change)
   const key = s.rounds.length + ':' + s.id;

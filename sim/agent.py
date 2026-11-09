@@ -75,6 +75,30 @@ TOOLS = [
 ]
 
 
+PILOT_MAX_STEPS = 14      # manager sessions are short: propose, A/B test, adopt or not, note it
+AB_TABLES = 30
+
+PILOT_TOOL_NAMES = ("list_files", "read_file", "search", "write_file", "edit_file", "run_python", "submit",
+                    "set_active", "finish")
+PILOT_TOOLS = [t for t in TOOLS if t["function"]["name"] in PILOT_TOOL_NAMES] + [
+    {"type": "function", "function": {
+        "name": "ab_test",
+        "description": "Paired A/B test: plays the same tables (same seat, opponents and cards) once with A and "
+                       "once with B against the other teams' current active bots, at real time limits. Returns "
+                       "average points, failed decisions and max decision ms for A and B, B_minus_A with its "
+                       "standard error, and a verdict ('B better' needs a gap above 2 standard errors).",
+        "parameters": {"type": "object", "properties": {
+            "a": {"type": "string", "description": "default agent.py"},
+            "b": {"type": "string", "description": "default agent_b.py"},
+            "tables": {"type": "integer", "description": f"default {AB_TABLES}, max 100"}}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "adopt",
+        "description": "Copy agent_b.py (or the given file) over agent.py and upload it (test match; becomes "
+                       "active if it passes). Use only when the A/B test supports B.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []}}},
+]
+
+
 def _fmt_t(s):
     s = max(0, int(s))
     return f"{s // 60}:{s % 60:02d}"
@@ -90,6 +114,9 @@ class RivalAgent:
         self.api_key = settings.get("api_key") or ""
         self.prices = C.price_for(self.model)
         self.sem = settings["_semaphore"]
+        self.mode = "pilot" if team.kind == "pilot" else "rival"
+        self.manager_lock = settings.get("_manager_locks", {}).get(team.manager) if self.mode == "pilot" else None
+        self.ab_tables = int(settings.get("ab_tables") or AB_TABLES)
         self.status = "waiting"
         self.detail = ""
         self.iterations = 0
@@ -134,7 +161,22 @@ class RivalAgent:
                 self.status = "done"
                 return
             try:
-                self._iterate(ev)
+                if self.manager_lock is not None:
+                    # a manager looks after several pilots, one session at a time
+                    self.status = "waiting"
+                    self.detail = f"waiting for {self.team.manager}"
+                    got = False
+                    while not got:
+                        got = self.manager_lock.acquire(timeout=1.0)
+                        if not got and (self.stop or self.game.stopped):
+                            self.status = "stopped"
+                            return
+                    try:
+                        self._iterate(ev)
+                    finally:
+                        self.manager_lock.release()
+                else:
+                    self._iterate(ev)
             except OutOfCreditsError as e:
                 self.status = "out_of_credits"
                 self.detail = str(e)[:300]
@@ -173,31 +215,23 @@ class RivalAgent:
         clock = (f"Event time {_fmt_t(g.event_time())}. "
                  + (f"Next: {nxt and ('Practice round %d' % nxt['n'] if nxt['kind'] == 'practice' else 'Scored round %d' % nxt['n'])}"
                     f" freezes submissions in {_fmt_t(nxt['at'] - g.event_time())}." if nxt else "No rounds left."))
-        system = (
-            f"You are the AI coding assistant of {self.team.name}, a team in a pokerbot competition (the No Limit "
-            f"regional). You work autonomously with the tools provided, inside the team's workspace.\n\n"
-            f"Team style: {self.team.persona}\n\n"
-            "Goal: finish as high as possible on the final weighted leaderboard. The rules are in RULES.md. Your bot "
-            "is agent.py implementing act(state, memory) from poker_agent_sdk (see README.md, RULES.md, AGENTS.md), "
-            "1 ms per decision. Test with poker_agent (check, play) before submitting. Keep NOTES.md up to date with what you tried and what the data showed (it is your memory "
-            "between sessions). When you are done for now, call finish with a short summary.\n\n"
-            "Time matters like at the real event: each round freezes your ACTIVE bot at its start, and a team "
-            "without one forfeits (0 points). So in your first session, get a legal bot uploaded fast (a few "
-            "tool calls: read README.md/RULES.md/agent.py, make agent.py legal for the variant phases, run "
-            "poker_agent check, submit) BEFORE exploring further, then improve. Don't study the engine "
-            "internals in sdk/engine unless you need a specific detail. Every tool result ends with the event "
-            "clock and the time left until the next freeze; plan around it. Hand histories are gzipped: read "
-            "them with a run_python script (see hand-history/reader.py), not read_file.")
-        user = (f"{news}\n\n{clock}\n"
-                f"Your last session's summary: {self.last_summary or '(none - first session)'}")
+        if self.mode == "pilot":
+            system, user = self._pilot_prompt(ev, clock)
+        else:
+            system, user = self._rival_prompt(news, clock)
+        tools = PILOT_TOOLS if self.mode == "pilot" else TOOLS
+        max_steps = PILOT_MAX_STEPS if self.mode == "pilot" else MAX_STEPS
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         self._note("user", user)
         client = make_client(self.base_url, self.model, self.api_key)
         nudged = False
-        for step in range(MAX_STEPS):
+        for step in range(max_steps):
             if g.stopped or self.stop:
                 self.status = "stopped"
                 return
+            if self.mode == "pilot" and step == max_steps - 3:
+                messages.append({"role": "user", "content": "Three tool calls left: record the result in "
+                                 "NOTES.md and call finish."})
             if not nudged and self.team.active is None and step >= 6:
                 nudged = True
                 nxt = g.next_event()
@@ -212,7 +246,7 @@ class RivalAgent:
                     self.status = "stopped"
                     return
                 self.status = "working"
-                msg, usage = client.chat(messages, TOOLS)
+                msg, usage = client.chat(messages, tools)
             self._account(usage)  # a request already in flight at reset is still billed
             if g.stopped or self.stop:
                 self.status = "stopped"
@@ -249,6 +283,61 @@ class RivalAgent:
             if finished:
                 return
         self.last_summary = "(session ended at the step limit)"
+        if self.mode == "pilot":
+            self.last_summary += " - check NOTES.md for the last A/B result"
+
+    def _rival_prompt(self, news, clock):
+        system = (
+            f"You are the AI coding assistant of {self.team.name}, a team in a pokerbot competition (the No Limit "
+            f"regional). You work autonomously with the tools provided, inside the team's workspace.\n\n"
+            f"Team style: {self.team.persona}\n\n"
+            "Goal: finish as high as possible on the final weighted leaderboard. The rules are in RULES.md. Your bot "
+            "is agent.py implementing act(state, memory) from poker_agent_sdk (see README.md, RULES.md, AGENTS.md), "
+            "1 ms per decision. Test with poker_agent (check, play) before submitting. Keep NOTES.md up to date with what you tried and what the data showed (it is your memory "
+            "between sessions). When you are done for now, call finish with a short summary.\n\n"
+            "Time matters like at the real event: each round freezes your ACTIVE bot at its start, and a team "
+            "without one forfeits (0 points). So in your first session, get a legal bot uploaded fast (a few "
+            "tool calls: read README.md/RULES.md/agent.py, make agent.py legal for the variant phases, run "
+            "poker_agent check, submit) BEFORE exploring further, then improve. Don't study the engine "
+            "internals in sdk/engine unless you need a specific detail. Every tool result ends with the event "
+            "clock and the time left until the next freeze; plan around it. Hand histories are gzipped: read "
+            "them with a run_python script (see hand-history/reader.py), not read_file.")
+        user = (f"{news}\n\n{clock}\n"
+                f"Your last session's summary: {self.last_summary or '(none - first session)'}")
+        return system, user
+
+    def _pilot_prompt(self, ev, clock):
+        g = self.game
+        t = self.team
+        if ev["type"] == "start":
+            news = ("The event has started. Your pilot's original strategy is active as upload v1 and plays from "
+                    "the first round. No results yet: look for a weakness or a likely leak in agent.py for this "
+                    "variant (see RULES.md) and test a fix.")
+        else:
+            rd = ev["round"]
+            tag = f"{rd['kind']}_{rd['n']}"
+            news = (f"{rd['label']} results are in: downloads/{tag}/my_bot_stats.json and results.json (read "
+                    f"these first, they are small), hand_history_subset.jsonl.gz (read with a run_python "
+                    f"script, see hand-history/reader.py).")
+        system = (
+            f"You are {t.manager}, one of the strategy managers in a pokerbot practice event (No Limit "
+            f"regional rules, variant {g.variant}). You look after several pilot strategies in turn; right now "
+            f"you are working on pilot '{t.pilot}' (team {t.name}). The pilot was written by a strong model and "
+            "is a good base: improve it with small, tested changes, never rewrite it.\n\n"
+            f"Each session is SHORT (at most {PILOT_MAX_STEPS} tool calls) and your messages should be brief "
+            "(1-3 sentences):\n"
+            "1. Read NOTES.md (your A/B log for this pilot) and the newest results if any.\n"
+            "2. Propose one or two specific modifications (e.g. a threshold, a bet size, a discard/reveal "
+            "choice, a fix for failed decisions). Don't repeat a change NOTES.md shows already failed.\n"
+            "3. Write the modified bot to agent_b.py (write_file a copy of agent.py, or edit_file a copy).\n"
+            "4. ab_test (agent.py vs agent_b.py). Adopt B only if the verdict is 'B better', or B fixes "
+            "failed decisions/timeouts without losing points; adopt uploads it.\n"
+            "5. Append one line to NOTES.md: the change, B_minus_A +/- std_error, adopted or not. Then finish.\n\n"
+            "The bot must keep act(state, memory) from poker_agent_sdk and stay under 1 ms per decision. "
+            "pilot_original/ is the untouched original for reference.")
+        user = (f"{news}\n\n{clock}\nActive upload: v{t.active}. "
+                f"Last session on this pilot: {self.last_summary or '(none - first session)'}")
+        return system, user
 
     # ------------------------------------------------------------ tools
     def _path(self, p):
@@ -344,6 +433,19 @@ class RivalAgent:
                 return json.dumps(self.game.submit(self.team.id, data, os.path.basename(p)))
             if name == "set_active":
                 return json.dumps(self.game.set_active(self.team.id, a.get("version")))
+            if name == "ab_test":
+                return self._ab_test(a)
+            if name == "adopt":
+                src = self._path(a.get("path") or "agent_b.py")
+                if not os.path.isfile(src):
+                    return f"error: {os.path.relpath(src, self.ws)} does not exist"
+                with open(src, "rb") as f:
+                    data = f.read()
+                with open(os.path.join(self.ws, "agent.py"), "wb") as f:
+                    f.write(data)
+                self.detail = "uploading (test match)"
+                r = self.game.submit(self.team.id, data, "agent.py")
+                return "agent.py replaced; upload: " + json.dumps(r)
             if name == "finish":
                 return "session finished"
             return f"unknown tool {name}"
@@ -351,6 +453,25 @@ class RivalAgent:
             return "timed out after 60 s"
         except Exception as e:
             return f"error: {type(e).__name__}: {e}"
+
+    def _ab_test(self, a):
+        g = self.game
+        pa = self._path(a.get("a") or "agent.py")
+        pb = self._path(a.get("b") or "agent_b.py")
+        for p in (pa, pb):
+            if not os.path.isfile(p):
+                return f"error: {os.path.relpath(p, self.ws)} does not exist"
+        opps = [t.current for t in g.teams if t.id != self.team.id and t.current and os.path.isfile(t.current)]
+        if not opps:
+            return "error: no opponents available"
+        n = max(4, min(100, int(a.get("tables") or self.ab_tables)))
+        self.detail = f"A/B test, {n} tables"
+        from .game import ROOT
+        args = [sys.executable, "-m", "sim.abtest", pa, pb, "--tables", str(n), "--variant", g.variant,
+                "--seed", str(int(time.time()) % 100000), "--opponents"] + opps
+        code, out, err = run_proc(args, ROOT, 600)
+        lines = [ln for ln in (out or "").splitlines() if ln.startswith("{")]
+        return lines[-1] if lines else f"A/B test failed (exit {code}): {(err or out)[-2000:]}"
 
     def _clock_line(self):
         g = self.game
@@ -402,6 +523,7 @@ class RivalAgent:
 
     def to_dict(self):
         return {"team": self.team.id, "name": self.team.name, "persona": self.team.persona, "status": self.status,
+                "manager": self.team.manager, "mode": self.mode,
                 "detail": self.detail, "iterations": self.iterations, "steps": self.steps,
                 "tokens_in": self.tokens_in, "tokens_cached": self.tokens_cached, "tokens_out": self.tokens_out,
                 "cost": self.cost, "last_summary": self.last_summary,

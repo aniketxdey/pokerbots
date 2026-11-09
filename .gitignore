@@ -5,3 +5,6 @@ bots_removed/
 *.upload
 .DS_Store
 sim_runs/
+pilots/incoming/*
+!pilots/incoming/.keep
+pilots/frozen/

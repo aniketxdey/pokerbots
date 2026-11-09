@@ -63,6 +63,18 @@ def kill_all_procs():
         except Exception:
             pass
     return len(procs)
+WORKING_KINDS = ("human", "ai", "pilot")   # teams that get workspaces, downloads and hand histories
+
+
+def _writable(path):
+    import stat
+    for root, dirs, files in os.walk(path):
+        os.chmod(root, os.stat(root).st_mode | stat.S_IWUSR)
+        for f in files:
+            p = os.path.join(root, f)
+            os.chmod(p, os.stat(p).st_mode | stat.S_IWUSR)
+
+
 ALLOWED_IMPORT_ROOTS = None  # standard library only (checked against sys.stdlib_module_names)
 
 
@@ -74,7 +86,9 @@ class Team:
     def __init__(self, tid, name, kind, persona="", house_bot=None):
         self.id = tid
         self.name = name
-        self.kind = kind            # human | ai | house
+        self.kind = kind            # human | ai | house | pilot | clone
+        self.pilot = None           # pilot id (pilot and clone teams)
+        self.manager = None         # manager name (pilot teams with managers)
         self.persona = persona
         self.house_bot = house_bot
         self.submissions = []       # uploads: [{n, t, file, status, problem, log, bytes}]
@@ -88,7 +102,8 @@ class Team:
             cd = max(0, C.UPLOAD_COOLDOWN_S - (ev_t - self.last_submit_t))
         return {"id": self.id, "name": self.name, "kind": self.kind, "persona": self.persona,
                 "submissions": self.submissions[-30:], "n_submissions": len(self.submissions),
-                "active": self.active, "has_bot": self.current is not None, "cooldown_s": cd}
+                "active": self.active, "has_bot": self.current is not None, "cooldown_s": cd,
+                "pilot": self.pilot, "manager": self.manager}
 
 
 class Game:
@@ -98,7 +113,7 @@ class Game:
         self.dir = os.path.join(RUNS_DIR, self.id)
         os.makedirs(self.dir, exist_ok=True)
         self.speed = float(s.get("speed", 1.0))
-        self.variant = s.get("variant", "sf2026_reveal")
+        self.variant = s.get("variant", C.DEFAULT_VARIANT)
         self.points = s.get("points", [50, 30, 20, 0, 0, 0, 0, 0])
         self.practice_iterations = int(s.get("practice_iterations", C.PRACTICE_ITERATIONS))
         self.scored_iterations = int(s.get("scored_iterations", C.SCORED_ITERATIONS))
@@ -120,8 +135,16 @@ class Game:
         self.agents = []            # filled by the server (sim.agent.RivalAgent)
         self.listeners = []         # callables(event_dict) for agents
         rng = random.Random(self.id)
-        # teams: you + AI rivals + house bots to fill the 8 seats
         self.teams = [Team(HUMAN_ID, s.get("team_name") or "Aniket & Mitch", "human")]
+        self.field = s.get("field", "ai")
+        self.pilot_set = None
+        if self.field == "pilots":
+            self._build_pilot_field(s, rng)
+            for t in self.teams:
+                self._init_workspace(t)
+            self._save()
+            return
+        # teams: you + AI rivals + house bots to fill the 8 seats
         personas = list(C.PERSONAS)
         for k in range(self.n_rivals):
             name, persona = personas[k % len(personas)]
@@ -136,6 +159,46 @@ class Game:
         self._save()
 
     # ------------------------------------------------------------------ setup
+    def _build_pilot_field(self, s, rng):
+        """Pilot field: every pilot of a frozen set is a team (its copy starts as active upload v1),
+        plus static clones (unchanged copies of pilots, as a baseline that never iterates), plus you.
+        Rounds seat everyone at 8-max tables; a short last table gets non-scoring fillers."""
+        from . import pilots as P
+        ps = P.get_set(s.get("pilot_set") or "")
+        if ps is None:
+            raise ValueError(f"no frozen pilot set named '{s.get('pilot_set')}'")
+        self.pilot_set = ps["name"]
+        good = [p for p in ps["pilots"] if p.get("ok")]
+        if not good:
+            raise ValueError("this pilot set has no pilot that passed its test match")
+        self.n_rivals = len(good)
+        n_mgr = max(0, min(len(good), int(s.get("managers", 3))))
+        for k, p in enumerate(good):
+            t = Team(f"p_{p['id']}", p["id"], "pilot")
+            t.pilot = p["id"]
+            if n_mgr:
+                t.manager = f"Manager {k % n_mgr + 1}"
+            t.persona = f"pilot {p['id']}" + (f", managed by {t.manager}" if t.manager else ", static")
+            self.teams.append(t)
+        want = s.get("clone_ids") or []
+        if isinstance(want, str):
+            want = [x.strip() for x in want.split(",") if x.strip()]
+        ids = [p["id"] for p in good]
+        n_cl = max(0, min(8, int(s.get("clones", 2))))
+        picks = [x for x in want if x in ids][:n_cl]
+        rest = [x for x in ids if x not in picks]
+        rng.shuffle(rest)
+        picks += rest[:n_cl - len(picks)]
+        for k, pid in enumerate(picks):
+            t = Team(f"clone{k + 1}", f"Clone of {pid}", "clone")
+            t.pilot = pid
+            t.persona = f"static copy of the original {pid}"
+            self.teams.append(t)
+
+    def _pilot_dir(self, team):
+        from . import pilots as P
+        return os.path.dirname(P.pilot_path(self.pilot_set, team.pilot))
+
     def _house_pool(self):
         d = os.path.join(ROOT, "bots")
         return sorted(f[:-3] for f in os.listdir(d) if f.endswith(".py") and not f.startswith("sf_contender")
@@ -166,7 +229,33 @@ class Game:
             shutil.copy(src, dst)
             team.current = dst
             return
+        ign = shutil.ignore_patterns("__pycache__", "*.pyc")
+        if team.kind == "clone":
+            dst = os.path.join(ws, "submissions", "clone")
+            shutil.copytree(self._pilot_dir(team), dst, ignore=ign)
+            _writable(dst)
+            team.current = os.path.join(dst, "agent.py")
+            return
         write_starter_kit(ws, self)
+        if team.kind == "pilot":
+            src = self._pilot_dir(team)
+            # the team's working copy, an untouched reference copy, and upload v1 (already checked
+            # when the set was frozen, so it starts active without a new test match)
+            shutil.copytree(src, ws, ignore=ign, dirs_exist_ok=True)
+            _writable(ws)   # copytree also copies the frozen set's read-only permissions
+            shutil.copytree(src, os.path.join(ws, "pilot_original"), ignore=ign)
+            v1 = os.path.join(ws, "submissions", "v01", "bot")
+            shutil.copytree(src, v1, ignore=ign)
+            _writable(ws)
+            team.submissions.append({"n": 1, "t": 0, "bytes": os.path.getsize(os.path.join(v1, "agent.py")),
+                                     "status": "active", "problem": "", "log": ["pilot (frozen set "
+                                     f"{self.pilot_set}); test match passed when the set was frozen"],
+                                     "file": "agent.py", "kind": "pilot", "path": os.path.join(v1, "agent.py")})
+            team.active, team.current = 1, os.path.join(v1, "agent.py")
+            with open(os.path.join(ws, "NOTES.md"), "a") as f:
+                f.write(f"# {team.name}\n\nStarting strategy: frozen pilot '{team.pilot}' from set "
+                        f"'{self.pilot_set}' (reference copy in pilot_original/). Upload v1 = the original.\n\n"
+                        "## A/B log\n")
 
     # ------------------------------------------------------------------ time
     def event_time(self):
@@ -196,7 +285,7 @@ class Game:
         check-or-fold, 1 ms, no time bank). A passing upload becomes active automatically."""
         with self.lock:
             team = self.team(team_id)
-            if team is None or team.kind == "house":
+            if team is None or team.kind in ("house", "clone"):
                 return {"ok": False, "problem": "unknown team"}
             if self.finished:
                 return {"ok": False, "problem": "the event is over: uploads are closed"}
@@ -243,7 +332,7 @@ class Game:
     def set_active(self, team_id, n):
         with self.lock:
             team = self.team(team_id)
-            if team is None or team.kind == "house":
+            if team is None or team.kind in ("house", "clone"):
                 return {"ok": False, "problem": "unknown team"}
             if self.finished:
                 return {"ok": False, "problem": "the event is over"}
@@ -265,8 +354,10 @@ class Game:
     # ------------------------------------------------------------------ main loop
     def start(self):
         self.started_real = _now()
-        self._log(f"Event started: {self.variant}, {len(self.teams)} teams "
-                  f"({self.n_rivals} AI rivals), speed x{self.speed:g}")
+        what = (f"pilot set {self.pilot_set}: {self.n_rivals} pilots, "
+                f"{sum(1 for t in self.teams if t.kind == 'clone')} clones" if self.field == "pilots"
+                else f"{self.n_rivals} AI rivals")
+        self._log(f"Event started: {self.variant}, {len(self.teams)} teams ({what}), speed x{self.speed:g}")
         self._notify({"type": "start"})
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -414,7 +505,7 @@ class Game:
                     d = os.path.join(self.workspace(team), "downloads", f"{rd['kind']}_{rd['n']}")
                     os.makedirs(d, exist_ok=True)
                     self._merge_full_history(e, team, os.path.join(d, "hand_history_full.jsonl.gz"))
-                if team.kind != "house":
+                if team.kind in WORKING_KINDS:
                     d = os.path.join(self.workspace(team), "downloads", f"{rd['kind']}_{rd['n']}")
                     os.makedirs(d, exist_ok=True)
                     self._merge_full_history(e, team, os.path.join(d, "hand_history_subset.jsonl.gz"),
@@ -428,7 +519,7 @@ class Game:
         mode = self.settings.get("full_history", "you")
         if mode == "off":
             return []
-        return [t.id for t in self.teams if t.kind != "house" and (mode == "all" or t.id == HUMAN_ID)]
+        return [t.id for t in self.teams if t.kind in WORKING_KINDS and (mode == "all" or t.id == HUMAN_ID)]
 
     def _merge_full_history(self, e, team, dest, folder="full_history"):
         """Concatenate the per-worker gzip files (gzip members concatenate into one valid file)."""
@@ -494,7 +585,7 @@ class Game:
         for t in hist:
             by_team.setdefault(t["bot_id"], []).append(t)
         for team in self.teams:
-            if team.kind == "house":
+            if team.kind not in WORKING_KINDS:
                 continue
             d = os.path.join(self.workspace(team), "downloads", tag)
             os.makedirs(d, exist_ok=True)
@@ -530,7 +621,8 @@ class Game:
         t = self.event_time()
         nxt = self.next_event()
         return {
-            "id": self.id, "settings": self.settings, "variant": self.variant, "speed": self.speed,
+            "id": self.id, "settings": {k: v for k, v in self.settings.items() if k != "api_key"},
+            "variant": self.variant, "speed": self.speed, "field": self.field, "pilot_set": self.pilot_set,
             "event_time": t, "phase": self.phase(), "finished": self.finished,
             "build_left": max(0, self.build_minutes * 60 - t),
             "next_event": ({"label": ("Practice round %d" % nxt["n"]) if nxt["kind"] == "practice"
@@ -551,7 +643,7 @@ class Game:
     def _save(self):
         try:
             with open(os.path.join(self.dir, "state.json"), "w") as f:
-                json.dump({"id": self.id, "settings": self.settings,
+                json.dump({"id": self.id, "settings": {k: v for k, v in self.settings.items() if k != "api_key"},
                            "teams": [t.to_dict(self.event_time()) for t in self.teams],
                            "rounds": [{k: v for k, v in r.items() if k != "bots"} | {"results": self._results_table(r)}
                                       for r in self.rounds],
@@ -632,7 +724,7 @@ def add_spend(usd):
 # ---------------------------------------------------------------------- starter kit
 class KitSpec:
     """The settings a starter kit is written from (an event, or the setup form before one)."""
-    def __init__(self, variant="sf2026_reveal", points=(50, 30, 20, 0, 0, 0, 0, 0),
+    def __init__(self, variant=C.DEFAULT_VARIANT, points=(50, 30, 20, 0, 0, 0, 0, 0),
                  practice_iterations=1000, scored_iterations=10000):
         self.variant = variant
         self.points = list(points)

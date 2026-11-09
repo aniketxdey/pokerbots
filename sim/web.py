@@ -32,6 +32,7 @@ def defaults():
     from engine.scoring import POINT_PRESETS
     return jsonify({
         "base_url": C.DEFAULT_BASE_URL, "model": C.DEFAULT_MODEL, "rivals": 7, "concurrency": C.DEFAULT_CONCURRENCY,
+        "variant": C.DEFAULT_VARIANT,
         "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
         "variants": [{"id": v.id, "name": v.name, "description": v.description} for v in V
                      if v.id.startswith("sf2026")],
@@ -51,7 +52,7 @@ def new_game():
         settings = {
             "team_name": s.get("team_name") or "Aniket & Mitch",
             "rivals": max(0, min(7, int(s.get("rivals", 7)))),
-            "variant": s.get("variant") or "sf2026_reveal",
+            "variant": s.get("variant") or "sf2026_reveal_preflop",
             "points": [float(x) for x in (s.get("points") or [50, 30, 20, 0, 0, 0, 0, 0])][:8],
             "practice_iterations": max(10, int(s.get("practice_iterations", 1000))),
             "scored_iterations": max(10, int(s.get("scored_iterations", 5000))),
@@ -65,14 +66,24 @@ def new_game():
             "build_minutes": max(1.0, float(s.get("build_minutes", 60))),
             "practice_every": max(0.5, float(s.get("practice_every", 10))),
             "scored_gap": max(0.5, float(s.get("scored_gap", 20))),
+            "field": "pilots" if s.get("field") == "pilots" else "ai",
+            "pilot_set": s.get("pilot_set") or "",
+            "clones": max(0, min(8, int(s.get("clones", 2)))),
+            "clone_ids": s.get("clone_ids") or "",
+            "managers": max(0, min(12, int(s.get("managers", 3)))),
+            "ab_tables": max(4, min(100, int(s.get("ab_tables", 30)))),
         }
         while len(settings["points"]) < 8:
             settings["points"].append(0.0)
-        g = Game(settings)
+        try:
+            g = Game(settings)
+        except ValueError as e:
+            return jsonify({"ok": False, "problem": str(e)}), 400
         sem = threading.Semaphore(settings["concurrency"])
-        agent_settings = dict(settings, api_key=s.get("api_key") or "", _semaphore=sem)
+        locks = {t.manager: threading.Lock() for t in g.teams if t.kind == "pilot" and t.manager}
+        agent_settings = dict(settings, api_key=s.get("api_key") or "", _semaphore=sem, _manager_locks=locks)
         for t in g.teams:
-            if t.kind == "ai":
+            if t.kind == "ai" or (t.kind == "pilot" and t.manager):
                 g.agents.append(RivalAgent(g, t, agent_settings))
         _G["game"] = g
         g.start()
@@ -91,6 +102,26 @@ def _halt(g):
             a.pending = []
             a.cv.notify_all()
     return kill_all_procs()
+
+
+@bp.get("/api/sim/pilots")
+def pilots_list():
+    from . import pilots as P
+    return jsonify({"incoming": P.list_incoming(), "sets": P.list_sets(),
+                    "incoming_dir": P.INCOMING})
+
+
+@bp.post("/api/sim/pilots/freeze")
+def pilots_freeze():
+    """Freeze everything in pilots/incoming/ as a named, read-only set (checked one by one)."""
+    from . import pilots as P
+    a = request.get_json(force=True) or {}
+    name = (a.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "problem": "give the set a name"}), 400
+    with _lock:
+        r = P.freeze(name, a.get("variant") or C.DEFAULT_VARIANT)
+    return jsonify(r)
 
 
 @bp.post("/api/sim/stop")
@@ -148,7 +179,7 @@ def activate():
 def localtest():
     """`poker-agent play`: a few local tables vs the kit's examples (100 ms bank), plus `check`."""
     g = game()
-    variant = g.variant if g else (request.args.get("variant") or "sf2026_reveal")
+    variant = g.variant if g else (request.args.get("variant") or "sf2026_reveal_preflop")
     data = _source_from_request()
     if data is None:
         return jsonify({"ok": False, "problem": "no file"}), 400
@@ -250,7 +281,7 @@ def kit():
     else:
         a = request.args
         pts = [float(x) for x in (a.get("points") or "50,30,20,0,0,0,0,0").split(",") if x.strip()]
-        spec = KitSpec(a.get("variant") or "sf2026_reveal", (pts + [0.0] * 8)[:8],
+        spec = KitSpec(a.get("variant") or "sf2026_reveal_preflop", (pts + [0.0] * 8)[:8],
                        int(a.get("practice_iterations") or 1000), int(a.get("scored_iterations") or 5000))
     with tempfile.TemporaryDirectory() as d:
         write_starter_kit(d, spec)

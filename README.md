@@ -267,6 +267,29 @@ worker processes) so the 1 ms timing stays accurate. If your machine can't finis
 tables in a round's 20 minutes, lower "Tables per scored round". Event data is saved under
 `sim_runs/`.
 
+## Pilot strategies (frozen sets, managers, A/B tests)
+
+Start an event from a set of strong starting bots instead of AI rivals building from scratch.
+
+1. Put the pilots in `pilots/incoming/`: each one an agent.py-style `.py`, a zip with agent.py at its root, or a folder with agent.py.
+2. Freeze them as a named set, either with the **Freeze** button on `/sim` or with `python -m sim.pilots freeze night1`. This copies each pilot to `pilots/frozen/<set>/<pilot>/`, runs the upload test match, records a sha256 in `manifest.json`, and makes the files read-only. Events only ever edit their own copies, so you can rerun fresh from the same originals as often as you like. Neither `incoming/` nor `frozen/` is committed to git.
+3. Choose **Field: Pilot strategies**, then pick the set, the number of static clones and the number of managers.
+
+How the event runs:
+
+- **Pilots:** each pilot is a team. Its frozen original is active upload v1 from the first round. The workspace holds `pilot_original/` for reference and a `NOTES.md` A/B log.
+- **Clones:** unchanged copies of chosen pilots (random if you don't pick) that never iterate, so they show whether the iterated versions actually improved.
+- **Managers:** each manager owns about 12/N pilots. At the start and after every round, it works through its pilots one at a time in short sessions of at most 14 tool calls:
+  - propose one or two changes in `agent_b.py`;
+  - run `ab_test` (paired tables: same seat, opponents and cards for A and B, played against the other teams' current active bots at real time limits);
+  - `adopt` (overwrite agent.py and upload it) only if the verdict is "B better", or if B fixes failed decisions without losing points;
+  - log the result in NOTES.md.
+- **Seating:** 12 pilots + 2 clones + you is 15 entrants, so one 8-seat table and one 7-seat table with a non-scoring filler. Use 3 clones for two full tables.
+
+Standalone A/B test: `python -m sim.abtest a.py b.py --opponents x.py y.py ... --tables 40 --variant sf2026_reveal_preflop`.
+
+The default variant is now `sf2026_reveal_preflop` (discard & reveal after preflop betting).
+
 ## Hand histories
 
 Like the practice-round downloads at the event, the engine can export every hand a chosen bot
