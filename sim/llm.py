@@ -39,6 +39,8 @@ class OpenAICompatible:
         self.timeout = timeout
 
     def chat(self, messages, tools=None):
+        if "api.openai.com" in self.base_url:
+            return self._responses(messages, tools)
         msgs = [{k: v for k, v in m.items() if not (m.get("role") == "tool" and k == "name")} for m in messages]
         body = {"model": self.model, "messages": msgs, "stream": False}
         if tools:
@@ -63,6 +65,81 @@ class OpenAICompatible:
                 last = f"HTTP {e.code}: {detail}"
                 if is_out_of_credits(e.code, detail):
                     raise OutOfCreditsError(last)  # retrying won't help
+                if e.code in (429, 500, 502, 503, 504):
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                raise LLMError(last)
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                last = str(e)
+                time.sleep(3 * (attempt + 1))
+        raise LLMError(f"model unavailable after retries: {last}")
+
+
+    # ---- OpenAI Responses API: reasoning models only accept function tools here, not in /chat/completions
+    def _responses(self, messages, tools):
+        import os
+        items = []
+        for m in messages:
+            role = m.get("role")
+            if role == "tool":
+                items.append({"type": "function_call_output", "call_id": m.get("tool_call_id"),
+                              "output": str(m.get("content") or "")})
+            elif role == "assistant":
+                if m.get("content"):
+                    items.append({"role": "assistant", "content": str(m["content"])})
+                for c in m.get("tool_calls") or []:
+                    fn = c.get("function") or {}
+                    items.append({"type": "function_call", "call_id": c.get("id"), "name": fn.get("name"),
+                                  "arguments": fn.get("arguments") or "{}"})
+            else:
+                items.append({"role": "developer" if role == "system" else (role or "user"),
+                              "content": str(m.get("content") or "")})
+        body = {"model": self.model, "input": items, "store": False}
+        effort = os.environ.get("SIM_REASONING_EFFORT", "low")
+        if effort:
+            body["reasoning"] = {"effort": effort}
+        if tools:
+            body["tools"] = [{"type": "function", "name": t["function"]["name"],
+                              "description": t["function"].get("description", ""),
+                              "parameters": t["function"].get("parameters") or {"type": "object", "properties": {}}}
+                             for t in tools]
+        out = self._post("/responses", body)
+        text, calls = [], []
+        for it in out.get("output") or []:
+            if it.get("type") == "message":
+                for c in it.get("content") or []:
+                    if c.get("type") in ("output_text", "text"):
+                        text.append(c.get("text", ""))
+            elif it.get("type") == "function_call":
+                calls.append({"id": it.get("call_id") or it.get("id"), "type": "function",
+                              "function": {"name": it.get("name"), "arguments": it.get("arguments") or "{}"}})
+        msg = {"role": "assistant", "content": "\n".join(text) or None}
+        if calls:
+            msg["tool_calls"] = calls
+        u = out.get("usage") or {}
+        usage = {"prompt_tokens": u.get("input_tokens", 0), "completion_tokens": u.get("output_tokens", 0),
+                 "prompt_tokens_details": {"cached_tokens": (u.get("input_tokens_details") or {}).get("cached_tokens", 0)}}
+        return msg, usage
+
+    def _post(self, path, body):
+        import os
+        if not self.api_key and "api.openai.com" in self.base_url:
+            self.api_key = os.environ.get("OPENAI_API_KEY", "")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        data = json.dumps(body).encode()
+        last = None
+        for attempt in range(4):
+            req = urllib.request.Request(self.base_url + path, data=data, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    return json.loads(r.read().decode())
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode(errors="replace")[:400]
+                last = f"HTTP {e.code}: {detail}"
+                if is_out_of_credits(e.code, detail):
+                    raise OutOfCreditsError(last)
                 if e.code in (429, 500, 502, 503, 504):
                     time.sleep(3 * (attempt + 1))
                     continue
