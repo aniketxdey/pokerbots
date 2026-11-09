@@ -180,7 +180,14 @@ class RivalAgent:
             "Goal: finish as high as possible on the final weighted leaderboard. The rules are in RULES.md. Your bot "
             "is agent.py implementing act(state, memory) from poker_agent_sdk (see README.md, RULES.md, AGENTS.md), "
             "1 ms per decision. Test with poker_agent (check, play) before submitting. Keep NOTES.md up to date with what you tried and what the data showed (it is your memory "
-            "between sessions). When you are done for now, call finish with a short summary.")
+            "between sessions). When you are done for now, call finish with a short summary.\n\n"
+            "Time matters like at the real event: each round freezes your ACTIVE bot at its start, and a team "
+            "without one forfeits (0 points). So in your first session, get a legal bot uploaded fast (a few "
+            "tool calls: read README.md/RULES.md/agent.py, make agent.py legal for the variant phases, run "
+            "poker_agent check, submit) BEFORE exploring further, then improve. Don't study the engine "
+            "internals in sdk/engine unless you need a specific detail. Every tool result ends with the event "
+            "clock and the time left until the next freeze; plan around it. Hand histories are gzipped: read "
+            "them with a run_python script (see hand-history/reader.py), not read_file.")
         user = (f"{news}\n\n{clock}\n"
                 f"Your last session's summary: {self.last_summary or '(none - first session)'}")
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -227,7 +234,7 @@ class RivalAgent:
                 result = self._tool(name, args)
                 self._note("tool", f"{name}({_short(args)}) -> {result[:300]}")
                 messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "name": name,
-                                 "content": result[:OUT_LIMIT]})
+                                 "content": result[:OUT_LIMIT] + self._clock_line()})
                 if name == "finish":
                     self.last_summary = str(args.get("summary", ""))[:800]
                     finished = True
@@ -336,6 +343,17 @@ class RivalAgent:
             return "timed out after 60 s"
         except Exception as e:
             return f"error: {type(e).__name__}: {e}"
+
+    def _clock_line(self):
+        g = self.game
+        t = g.event_time()
+        nxt = g.next_event()
+        tm = self.team
+        act = f"active bot v{tm.active}" if tm.active else "NO active bot yet"
+        if nxt:
+            lbl = ("practice round %d" % nxt["n"]) if nxt["kind"] == "practice" else ("scored round %d" % nxt["n"])
+            return f"\n[event clock {_fmt_t(t)} | {lbl} freezes in {_fmt_t(nxt['at'] - t)} | {act}]"
+        return f"\n[event clock {_fmt_t(t)} | no rounds left | {act}]"
 
     def _env(self):
         env = dict(os.environ)
