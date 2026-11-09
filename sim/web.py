@@ -59,6 +59,7 @@ def new_game():
             "base_url": s.get("base_url") or C.DEFAULT_BASE_URL,
             "concurrency": max(1, min(10, int(s.get("concurrency", 3)))),
             "workers": int(s.get("workers", 0)),
+            "history_sample": min(1.0, max(0.0, float(s.get("history_sample", 20)) / 100.0)),
             "full_history": s.get("full_history") if s.get("full_history") in ("you", "all", "off") else "you",
             "build_minutes": max(1.0, float(s.get("build_minutes", 60))),
             "practice_every": max(0.5, float(s.get("practice_every", 10))),
@@ -196,6 +197,44 @@ def download(rel):
     if not p.startswith(base + os.sep) or not os.path.isfile(p):
         abort(404)
     return send_file(p, as_attachment=True, download_name=rel.replace("/", "_"))
+
+
+@bp.get("/api/sim/download_sample/<tag>")
+def download_sample(tag):
+    """A random share of the hands you played in one round (?pct=20), drawn fresh each time from
+    your full hand history (or from the round's sample file if full history is off)."""
+    import gzip
+    import random as _r
+    g = game()
+    if g is None:
+        abort(404)
+    tag = os.path.basename(tag)
+    base = os.path.join(g.workspace(g.team(HUMAN_ID)), "downloads", tag)
+    src = next((os.path.join(base, f) for f in ("hand_history_full.jsonl.gz", "hand_history_subset.jsonl.gz")
+                if os.path.isfile(os.path.join(base, f))), None)
+    if src is None:
+        abort(404)
+    try:
+        pct = min(100.0, max(0.1, float(request.args.get("pct", 20))))
+    except ValueError:
+        pct = 20.0
+    rng = _r.Random()
+    buf = io.BytesIO()
+    kept = total = 0
+    with gzip.open(src, "rt", encoding="utf-8") as fin, gzip.GzipFile(fileobj=buf, mode="wb") as fout:
+        for line in fin:
+            if not line.strip():
+                continue
+            total += 1
+            if rng.random() * 100.0 < pct:
+                fout.write(line.encode("utf-8"))
+                kept += 1
+    buf.seek(0)
+    name = f"{tag}_hands_{pct:g}pct.jsonl.gz"
+    resp = send_file(buf, as_attachment=True, download_name=name, mimetype="application/gzip")
+    resp.headers["X-Hands-Kept"] = str(kept)
+    resp.headers["X-Hands-Total"] = str(total)
+    return resp
 
 
 @bp.get("/api/sim/kit")

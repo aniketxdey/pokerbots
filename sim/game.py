@@ -103,6 +103,7 @@ class Game:
         self.practice_iterations = int(s.get("practice_iterations", C.PRACTICE_ITERATIONS))
         self.scored_iterations = int(s.get("scored_iterations", C.SCORED_ITERATIONS))
         self.history_tables = int(s.get("history_tables", 25))
+        self.history_sample = min(1.0, max(0.0, float(s.get("history_sample", 0.20))))
         self.n_rivals = max(0, min(7, int(s.get("rivals", 7))))
         # schedule (minutes of event time); defaults are the official ones
         self.build_minutes = max(1.0, float(s.get("build_minutes", C.BUILD_MINUTES)))
@@ -356,7 +357,9 @@ class Game:
         label = self._label(e)
         iters = self.practice_iterations if e["kind"] == "practice" else self.scored_iterations
         cfg = Config(variant=self.variant, iterations=iters, points=list(self.points),
-                     history_bot="*", history_tables=self.history_tables, max_hands=C.HAND_CAP,
+                     history_bot="", history_tables=0, max_hands=C.HAND_CAP,
+                     history_sample=self.history_sample,
+                     history_sample_dir=os.path.join(self.dir, "sample_history", f"{e['kind']}_{e['n']}"),
                      history_full=self._full_history_ids(), round_label=label,
                      history_dir=os.path.join(self.dir, "full_history", f"{e['kind']}_{e['n']}"),
                      blind_interval=C.HANDS_PER_LEVEL, time_bank_ms=C.TIME_BANK_MS,
@@ -391,6 +394,11 @@ class Game:
                     d = os.path.join(self.workspace(team), "downloads", f"{rd['kind']}_{rd['n']}")
                     os.makedirs(d, exist_ok=True)
                     self._merge_full_history(e, team, os.path.join(d, "hand_history_full.jsonl.gz"))
+                if team.kind != "house":
+                    d = os.path.join(self.workspace(team), "downloads", f"{rd['kind']}_{rd['n']}")
+                    os.makedirs(d, exist_ok=True)
+                    self._merge_full_history(e, team, os.path.join(d, "hand_history_subset.jsonl.gz"),
+                                             folder="sample_history")
             self._save()
         self._log(f"{label} finished in {rd['seconds']:.0f}s real time; downloads are ready")
         self._notify({"type": "round", "round": rd})
@@ -402,10 +410,13 @@ class Game:
             return []
         return [t.id for t in self.teams if t.kind != "house" and (mode == "all" or t.id == HUMAN_ID)]
 
-    def _merge_full_history(self, e, team, dest):
+    def _merge_full_history(self, e, team, dest, folder="full_history"):
         """Concatenate the per-worker gzip files (gzip members concatenate into one valid file)."""
-        src = os.path.join(self.dir, "full_history", f"{e['kind']}_{e['n']}", team.id)
+        src = os.path.join(self.dir, folder, f"{e['kind']}_{e['n']}", team.id)
         if not os.path.isdir(src):
+            import gzip
+            with gzip.open(dest, "wt"):
+                pass  # no sampled tables: an empty file, so the download still exists
             return
         with open(dest, "wb") as out:
             for fn in sorted(os.listdir(src)):
@@ -478,17 +489,6 @@ class Game:
                 stats["version"] = rd["versions"].get(team.id)
                 with open(os.path.join(d, "my_bot_stats.json"), "w") as f:
                     json.dump(stats, f, indent=1)
-            names = {}
-            import gzip
-            with gzip.open(os.path.join(d, "hand_history_subset.jsonl.gz"), "wt") as f:
-                for tb in by_team.get(team.id, []):
-                    meta = {"round": rd["label"], "table": tb["table"], "my_place": tb["place"],
-                            "my_points": tb["points"]}
-                    for h in tb["hands"]:
-                        h = dict(h)
-                        # opponents are named in the downloads (seats are anonymous in play)
-                        h["seats"] = [dict(x) for x in h["seats"]]
-                        f.write(json.dumps(dict(meta, **h)) + "\n")
 
     # ------------------------------------------------------------------ misc
     def _notify(self, ev):

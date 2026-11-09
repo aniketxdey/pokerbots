@@ -64,6 +64,8 @@ class Config:
     history_tables: int = 25         # max tables of hand history per round
     history_full: list = field(default_factory=list)  # bot ids whose EVERY table is written to disk
     history_dir: str = ""            # where full hand histories go (one folder per bot id)
+    history_sample: float = 0.0      # fraction of each bot's tables sampled at random (0 = off)
+    history_sample_dir: str = ""     # where the random-sample hand histories go (one folder per bot id)
     round_label: str = ""            # written into full hand histories (e.g. "Scored round 3")
 
     @classmethod
@@ -211,6 +213,8 @@ def _run_chunk(task):
     hcount = {}
     full_ids = set(cfg.history_full or []) if cfg.history_dir else set()
     full_files = {}
+    sample_p = cfg.history_sample if cfg.history_sample_dir else 0.0
+    sample_files = {}
     for it in range(it_start, it_end):
         rng = random.Random(f"{seed}-{round_idx}-{it}")
         order = list(range(nb))
@@ -254,7 +258,13 @@ def _run_chunk(task):
                     rec[k] = sl.idx
                 if full_ids and bots[sl.idx]["id"] in full_ids and sl.idx not in full.values():
                     full[k] = sl.idx
-            seats_rec = sorted(set(rec) | set(full))
+            sample = {}
+            if sample_p > 0:
+                srng = random.Random(f"{seed}-{round_idx}-{it}-{t_i}-sample")  # independent of the cards
+                for k, sl in enumerate(slots):
+                    if sl.scoring and sl.idx not in sample.values() and srng.random() < sample_p:
+                        sample[k] = sl.idx
+            seats_rec = sorted(set(rec) | set(full) | set(sample))
             table = Table(slots, cfg, rng, log=tl, record_seat=seats_rec if seats_rec else None)
             if tl is not None:
                 tl.append("Seats: " + ", ".join(f"S{i}={s.name}" for i, s in enumerate(slots)))
@@ -262,17 +272,19 @@ def _run_chunk(task):
             tables_played += 1
             if tl is not None:
                 log = _trim_log(tl, cfg.sample_log_hands)
-            for k, bidx in full.items():
-                f = full_files.get(bidx)
-                if f is None:
-                    d = os.path.join(cfg.history_dir, bots[bidx]["id"])
-                    os.makedirs(d, exist_ok=True)
-                    f = full_files[bidx] = gzip.open(os.path.join(d, f"chunk_{it_start:07d}.jsonl.gz"), "wt")
-                meta = {"round": cfg.round_label or round_idx + 1, "table": it + 1, "my_place": res.places[k] or ts,
-                        "my_points": res.points[k]}
-                for h in table.records:
-                    if h["my_seat"] == k:
-                        f.write(json.dumps(dict(meta, **h)) + "\n")
+            for files, base, chosen in ((full_files, cfg.history_dir, full),
+                                        (sample_files, cfg.history_sample_dir, sample)):
+                for k, bidx in chosen.items():
+                    f = files.get(bidx)
+                    if f is None:
+                        d = os.path.join(base, bots[bidx]["id"])
+                        os.makedirs(d, exist_ok=True)
+                        f = files[bidx] = gzip.open(os.path.join(d, f"chunk_{it_start:07d}.jsonl.gz"), "wt")
+                    meta = {"round": cfg.round_label or round_idx + 1, "table": it + 1,
+                            "my_place": res.places[k] or ts, "my_points": res.points[k]}
+                    for h in table.records:
+                        if h["my_seat"] == k:
+                            f.write(json.dumps(dict(meta, **h)) + "\n")
             for k, bidx in rec.items():
                 hcount[bidx] = hcount.get(bidx, 0) + 1
                 hist.append({"round": round_idx + 1, "table": hcount[bidx], "iteration": it + 1,
@@ -305,7 +317,7 @@ def _run_chunk(task):
                 a["chips_end"] += res.final_stacks[seat]
     for a in agg:
         a["stats"] = a["stats"].to_dict()
-    for f in full_files.values():
+    for f in list(full_files.values()) + list(sample_files.values()):
         f.close()
     return {"agg": agg, "log": log, "iterations": it_end - it_start, "tables": tables_played,
             "history": hist}

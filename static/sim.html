@@ -117,7 +117,9 @@
         <div class="hint">1 = real time (the real event). Higher = faster, for testing only.</div></div>
       <div><label>Full hand history (every table)</label><select id="full_history">
           <option value="you">Your team</option><option value="all">Every team (incl. AI rivals)</option><option value="off">Off (subset only)</option></select>
-        <div class="hint">Every team always gets a 25-table subset. Full sets are large (tens of MB per scored round).</div></div>
+        <div class="hint">Full sets are large (tens of MB per scored round).</div></div>
+      <div><label>Hand-history sample (% of each team's tables)</label><input id="history_sample" type="number" min="1" max="100" value="20">
+        <div class="hint">Every team gets a random sample of this share of its tables each round.</div></div>
       <div><label>Simulation worker processes</label><input id="workers" type="number" min="0" value="0">
         <div class="hint">0 = all cores. Leave a core free for accurate 1 ms timing.</div></div>
     </div>
@@ -161,6 +163,10 @@
   </section>
   <section class="card">
     <h2>Your downloads</h2>
+    <div class="flex" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <label style="margin:0">Hand sample to download</label>
+      <input id="dlPct" type="number" min="1" max="100" value="20" style="width:70px"> <span class="hint" style="margin:0">% of your hands, picked at random each click</span>
+    </div>
     <div class="hint">Available after each round: results, your bot's stats and your hand history.</div>
     <table><tbody id="downloads"></tbody></table>
   </section>
@@ -243,7 +249,7 @@ $('startBtn').onclick = async () => {
     points: $('points').value.split(/[ ,]+/).filter(Boolean).map(Number),
     practice_iterations: +$('practice_iterations').value, scored_iterations: +$('scored_iterations').value,
     concurrency: +$('concurrency').value, speed: +$('speed').value, workers: +$('workers').value,
-    full_history: $('full_history').value, build_minutes: +$('build_minutes').value, practice_every: +$('practice_every').value, scored_gap: +$('scored_gap').value };
+    full_history: $('full_history').value, history_sample: +$('history_sample').value, build_minutes: +$('build_minutes').value, practice_every: +$('practice_every').value, scored_gap: +$('scored_gap').value };
   $('startBtn').disabled = true;
   await fetch('/api/sim/new', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   $('startBtn').disabled = false; wantForm = false; lastDl = ''; poll();
@@ -290,6 +296,10 @@ $('submitBtn').onclick = async () => {
   $('submitMsg').innerHTML = r.ok ? `<span class="ok">v${r.version} passed its test match and is now your active bot (from the next round).</span>` : `<span class="bad">${r.version ? 'v' + r.version + ' rejected' : 'Not uploaded'}: ${esc(r.problem)}</span>`;
   poll();
 };
+function sampleDl(tag) {
+  const pct = Math.min(100, Math.max(1, +$('dlPct').value || 20));
+  window.location = `/api/sim/download_sample/${encodeURIComponent(tag)}?pct=${pct}`;
+}
 async function makeActive(n) {
   const r = await (await fetch('/api/sim/activate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({version: n})})).json();
   $('submitMsg').innerHTML = r.ok ? `<span class="ok">v${r.version} is now active (from the next round).</span>` : `<span class="bad">${esc(r.problem)}</span>`;
@@ -367,8 +377,11 @@ async function poll() {
   if (key !== lastDl) {
     lastDl = key;
     const dl = await (await fetch('/api/sim/downloads')).json();
-    $('downloads').innerHTML = dl.map(d => `<tr><td>${esc(d.round.replace('_', ' '))}</td><td><a href="/api/sim/download/${d.path}">${esc(d.file)}</a></td>`
-      + `<td class="n muted">${(d.bytes/1024).toFixed(0)} KB</td></tr>`).join('') || '<tr><td class="muted">Nothing yet.</td></tr>';
+    const rounds = [...new Set(dl.map(d => d.round))];
+    $('downloads').innerHTML = rounds.map(r => `<tr><td><b>${esc(r.replace('_', ' '))}</b></td><td>`
+      + `<button onclick="sampleDl('${r}')">⬇ Hand sample</button> `
+      + dl.filter(d => d.round === r).map(d => `<a href="/api/sim/download/${d.path}" class="hint" style="margin-left:8px">${esc(d.file)} (${(d.bytes/1024).toFixed(0)} KB)</a>`).join('')
+      + '</td></tr>').join('') || '<tr><td class="muted">Nothing yet.</td></tr>';
   }
 }
 
@@ -422,7 +435,7 @@ function renderRules(s) {
         <li>Libraries: standard library, the SDK, NumPy, SciPy, pandas, scikit-learn, PyTorch (CPU), LightGBM, XGBoost, ONNX Runtime, Numba, eval7.</li>
       </ul>
       <h3>After each round</h3>
-      <ul><li>Results for every team (average and finishes in every place), your bot's stats, and your hand history (gzipped JSON lines, opponents named): a 25-table subset and the full set of every table you played.</li></ul>
+      <ul><li>Results for every team (average and finishes in every place), your bot's stats, and your hand history (gzipped JSON lines, opponents named): the full set of every table you played (download any random share of hands, default 20%), plus a random 20% of your tables.</li></ul>
     </div>
     <div>
       <h3>Tables</h3>
