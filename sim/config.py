@@ -2,12 +2,21 @@
 
 # Ollama exposes an OpenAI-compatible API. With the desktop app signed in, cloud models are
 # served through the local server; without it, use https://ollama.com/v1 plus an API key.
-DEFAULT_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_MODEL = "glm-5.3-flash:cloud"
+# Default: OpenAI's API (no 3-request cap like Ollama Pro; GPT-5.6 Terra is newer, faster and
+# smarter than o3). Needs an API key: paste it in the setup form or set OPENAI_API_KEY.
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MODEL = "gpt-5.6-terra"
+DEFAULT_CONCURRENCY = 7
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
 # USD per million tokens (input, cached input, output), from ollama.com/pricing as of
 # 2026-10-07. Prices change: edit here or in the UI. Unknown models fall back to "default".
 PRICES = {
+    # OpenAI API (developers.openai.com model pages, 2026-11)
+    "gpt-5.6-terra": (2.00, 0.20, 12.00),
+    "gpt-5.6-luna": (0.20, 0.02, 1.20),
+    "gpt-5.6-sol": (5.00, 0.50, 30.00),
+    "o3": (2.00, 0.50, 8.00),
     "gpt-oss:120b": (0.15, 0.014, 0.60),
     "gpt-oss:20b": (0.07, 0.035, 0.30),
     "deepseek-v4.1-flash": (0.30, 0.006, 1.20),

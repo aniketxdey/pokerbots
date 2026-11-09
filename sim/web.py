@@ -31,7 +31,8 @@ def defaults():
     from engine.variants import V
     from engine.scoring import POINT_PRESETS
     return jsonify({
-        "base_url": C.DEFAULT_BASE_URL, "model": C.DEFAULT_MODEL, "rivals": 7, "concurrency": 3,
+        "base_url": C.DEFAULT_BASE_URL, "model": C.DEFAULT_MODEL, "rivals": 7, "concurrency": C.DEFAULT_CONCURRENCY,
+        "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
         "variants": [{"id": v.id, "name": v.name, "description": v.description} for v in V
                      if v.id.startswith("sf2026")],
         "points_presets": POINT_PRESETS, "prices": C.PRICES,
@@ -57,7 +58,7 @@ def new_game():
             "speed": max(0.1, min(120.0, float(s.get("speed", 1)))),
             "model": s.get("model") or C.DEFAULT_MODEL,
             "base_url": s.get("base_url") or C.DEFAULT_BASE_URL,
-            "concurrency": max(1, min(10, int(s.get("concurrency", 3)))),
+            "concurrency": max(1, min(20, int(s.get("concurrency", C.DEFAULT_CONCURRENCY)))),
             "workers": int(s.get("workers", 0)),
             "history_sample": min(1.0, max(0.0, float(s.get("history_sample", 20)) / 100.0)),
             "full_history": s.get("full_history") if s.get("full_history") in ("you", "all", "off") else "you",

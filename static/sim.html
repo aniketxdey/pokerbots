@@ -89,11 +89,12 @@
     <div><label>Variant timing</label><select id="variant"></select></div>
   </div>
   <div class="row">
-    <div><label>Rival model (Ollama)</label><input id="model">
+    <div><label>Rival model</label><input id="model">
       <div class="hint" id="priceHint"></div></div>
-    <div><label>Ollama URL</label><input id="base_url">
-      <div class="hint">Local Ollama app (signed in). For ollama.com directly use https://ollama.com/v1 + key.</div></div>
-    <div><label>API key (only for ollama.com)</label><input id="api_key" type="password" placeholder="optional"></div>
+    <div><label>Model API URL</label><input id="base_url">
+      <div class="hint">OpenAI: https://api.openai.com/v1 · local Ollama: http://localhost:11434/v1</div></div>
+    <div><label>API key</label><input id="api_key" type="password" placeholder="OpenAI key (or set OPENAI_API_KEY)">
+      <div class="hint" id="keyHint">Needed for OpenAI; not needed for local Ollama. Kept only in this app's memory.</div></div>
   </div>
   <div class="row">
     <div><label>Build phase (minutes)</label><input id="build_minutes" type="number" min="1" step="1" value="60">
@@ -111,8 +112,8 @@
         <div class="hint">Official: at least 5,000. Rounds always run to completion.</div></div>
     </div>
     <div class="row">
-      <div><label>Parallel model requests</label><input id="concurrency" type="number" min="1" max="10" value="3">
-        <div class="hint">Ollama Free allows 1, Pro 3, Max 10.</div></div>
+      <div><label>Parallel model requests</label><input id="concurrency" type="number" min="1" max="20" value="7">
+        <div class="hint">OpenAI: 7 (every rival at once). Ollama Free 1, Pro 3, Max 10.</div></div>
       <div><label>Clock speed</label><input id="speed" type="number" step="1" min="1" value="1">
         <div class="hint">1 = real time (the real event). Higher = faster, for testing only.</div></div>
       <div><label>Full hand history (every table)</label><select id="full_history">
@@ -233,7 +234,8 @@ let D = null, lastDl = '', wantForm = false;
 
 async function init() {
   D = await (await fetch('/api/sim/defaults')).json();
-  $('model').value = D.model; $('base_url').value = D.base_url;
+  $('model').value = D.model; $('base_url').value = D.base_url; $('concurrency').value = D.concurrency;
+  if (D.has_openai_key) $('keyHint').textContent = 'OPENAI_API_KEY is set in the environment: leave blank to use it.';
   $('variant').innerHTML = D.variants.map(v => `<option value="${v.id}" title="${esc(v.description)}">${esc(v.name)}</option>`).join('');
   priceHint(); $('model').oninput = priceHint;
   ['variant','points','practice_iterations','scored_iterations','build_minutes','practice_every','scored_gap'].forEach(id => $(id).addEventListener('input', () => renderRules(null)));

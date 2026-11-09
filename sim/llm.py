@@ -24,8 +24,10 @@ _CREDIT_WORDS = ("credit", "quota", "usage limit", "limit reached", "reached you
 
 def is_out_of_credits(code, detail):
     d = (detail or "").lower()
-    if code == 402:
+    if code == 402 or "insufficient_quota" in d:
         return True
+    if "rate limit" in d or "rate_limit" in d:
+        return False  # temporary per-minute limit: retried, not "out of credits"
     return code in (403, 429) and any(w in d for w in _CREDIT_WORDS)
 
 
@@ -37,11 +39,15 @@ class OpenAICompatible:
         self.timeout = timeout
 
     def chat(self, messages, tools=None):
-        body = {"model": self.model, "messages": messages, "stream": False}
+        msgs = [{k: v for k, v in m.items() if not (m.get("role") == "tool" and k == "name")} for m in messages]
+        body = {"model": self.model, "messages": msgs, "stream": False}
         if tools:
             body["tools"] = tools
         data = json.dumps(body).encode()
         headers = {"Content-Type": "application/json"}
+        if not self.api_key and "api.openai.com" in self.base_url:
+            import os
+            self.api_key = os.environ.get("OPENAI_API_KEY", "")
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         last = None

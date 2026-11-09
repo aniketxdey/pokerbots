@@ -5,7 +5,8 @@ their action through a tool call, exactly the way rival agents talk to the model
 endpoint answers, that the model makes valid tool calls, and reports speed, tokens and cost.
 
     python -m sim.smoketest                                  # local Ollama, default model
-    python -m sim.smoketest --model glm-5.3-flash:cloud --concurrency 3
+    OPENAI_API_KEY=sk-... python -m sim.smoketest          # default: OpenAI gpt-5.6-terra
+    python -m sim.smoketest --base-url http://localhost:11434/v1 --model glm-5.3-flash:cloud --concurrency 3
     python -m sim.smoketest --base-url https://ollama.com/v1 --api-key KEY
 """
 import argparse
@@ -44,7 +45,7 @@ def main():
     ap.add_argument("--base-url", default=C.DEFAULT_BASE_URL)
     ap.add_argument("--model", default=C.DEFAULT_MODEL)
     ap.add_argument("--api-key", default="")
-    ap.add_argument("--concurrency", type=int, default=3)
+    ap.add_argument("--concurrency", type=int, default=C.DEFAULT_CONCURRENCY)
     a = ap.parse_args()
 
     print(f"Endpoint {a.base_url}  model {a.model}  concurrency {a.concurrency}")
@@ -111,8 +112,8 @@ def main():
     if good == 7:
         print("Connection works: the AI rivals are ready.")
     elif good == 0:
-        print("Nothing worked. Is the Ollama app running and signed in (ollama signin), and has the model been "
-              "run once (ollama run %s)?" % a.model)
+        print("Nothing worked. For OpenAI: is OPENAI_API_KEY set (or --api-key) and the model name right? "
+              "For Ollama: is the app running and signed in, and has the model been run once?")
     sys.exit(0 if good == 7 else 1)
 
 
