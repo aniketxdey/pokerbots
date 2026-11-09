@@ -115,6 +115,9 @@
         <div class="hint">Ollama Free allows 1, Pro 3, Max 10.</div></div>
       <div><label>Clock speed</label><input id="speed" type="number" step="1" min="1" value="1">
         <div class="hint">1 = real time (the real event). Higher = faster, for testing only.</div></div>
+      <div><label>Full hand history (every table)</label><select id="full_history">
+          <option value="you">Your team</option><option value="all">Every team (incl. AI rivals)</option><option value="off">Off (subset only)</option></select>
+        <div class="hint">Every team always gets a 25-table subset. Full sets are large (tens of MB per scored round).</div></div>
       <div><label>Simulation worker processes</label><input id="workers" type="number" min="0" value="0">
         <div class="hint">0 = all cores. Leave a core free for accurate 1 ms timing.</div></div>
     </div>
@@ -240,7 +243,7 @@ $('startBtn').onclick = async () => {
     points: $('points').value.split(/[ ,]+/).filter(Boolean).map(Number),
     practice_iterations: +$('practice_iterations').value, scored_iterations: +$('scored_iterations').value,
     concurrency: +$('concurrency').value, speed: +$('speed').value, workers: +$('workers').value,
-    build_minutes: +$('build_minutes').value, practice_every: +$('practice_every').value, scored_gap: +$('scored_gap').value };
+    full_history: $('full_history').value, build_minutes: +$('build_minutes').value, practice_every: +$('practice_every').value, scored_gap: +$('scored_gap').value };
   $('startBtn').disabled = true;
   await fetch('/api/sim/new', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   $('startBtn').disabled = false; wantForm = false; lastDl = ''; poll();
@@ -419,7 +422,7 @@ function renderRules(s) {
         <li>Libraries: standard library, the SDK, NumPy, SciPy, pandas, scikit-learn, PyTorch (CPU), LightGBM, XGBoost, ONNX Runtime, Numba, eval7.</li>
       </ul>
       <h3>After each round</h3>
-      <ul><li>Results for every team (average and finishes in every place), your bot's stats, and your hand history (gzipped JSON lines, opponents named).</li></ul>
+      <ul><li>Results for every team (average and finishes in every place), your bot's stats, and your hand history (gzipped JSON lines, opponents named): a 25-table subset and the full set of every table you played.</li></ul>
     </div>
     <div>
       <h3>Tables</h3>

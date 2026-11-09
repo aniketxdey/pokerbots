@@ -357,6 +357,8 @@ class Game:
         iters = self.practice_iterations if e["kind"] == "practice" else self.scored_iterations
         cfg = Config(variant=self.variant, iterations=iters, points=list(self.points),
                      history_bot="*", history_tables=self.history_tables, max_hands=C.HAND_CAP,
+                     history_full=self._full_history_ids(), round_label=label,
+                     history_dir=os.path.join(self.dir, "full_history", f"{e['kind']}_{e['n']}"),
                      blind_interval=C.HANDS_PER_LEVEL, time_bank_ms=C.TIME_BANK_MS,
                      workers=int(self.settings.get("workers", 0)),
                      seed=random.randrange(1, 2 ** 31)).validate()
@@ -384,9 +386,32 @@ class Game:
             e["done"] = True
             self.current_round = None
             self._write_downloads(rd, hist)
+            for team in self.teams:
+                if team.id in self._full_history_ids():
+                    d = os.path.join(self.workspace(team), "downloads", f"{rd['kind']}_{rd['n']}")
+                    os.makedirs(d, exist_ok=True)
+                    self._merge_full_history(e, team, os.path.join(d, "hand_history_full.jsonl.gz"))
             self._save()
         self._log(f"{label} finished in {rd['seconds']:.0f}s real time; downloads are ready")
         self._notify({"type": "round", "round": rd})
+
+    def _full_history_ids(self):
+        """Teams that get the full hand history (every table they played), not just the subset."""
+        mode = self.settings.get("full_history", "you")
+        if mode == "off":
+            return []
+        return [t.id for t in self.teams if t.kind != "house" and (mode == "all" or t.id == HUMAN_ID)]
+
+    def _merge_full_history(self, e, team, dest):
+        """Concatenate the per-worker gzip files (gzip members concatenate into one valid file)."""
+        src = os.path.join(self.dir, "full_history", f"{e['kind']}_{e['n']}", team.id)
+        if not os.path.isdir(src):
+            return
+        with open(dest, "wb") as out:
+            for fn in sorted(os.listdir(src)):
+                with open(os.path.join(src, fn), "rb") as f:
+                    shutil.copyfileobj(f, out)
+        shutil.rmtree(src, ignore_errors=True)
 
     # ------------------------------------------------------------------ downloads
     def _results_table(self, rd):
@@ -455,7 +480,7 @@ class Game:
                     json.dump(stats, f, indent=1)
             names = {}
             import gzip
-            with gzip.open(os.path.join(d, "hand_history.jsonl.gz"), "wt") as f:
+            with gzip.open(os.path.join(d, "hand_history_subset.jsonl.gz"), "wt") as f:
                 for tb in by_team.get(team.id, []):
                     meta = {"round": rd["label"], "table": tb["table"], "my_place": tb["place"],
                             "my_points": tb["points"]}

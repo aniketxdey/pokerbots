@@ -231,7 +231,7 @@ simulator, `icm.py`, payouts and blinds), the `poker-agent` command (`play`, `ch
 `AGENTS.md`, `CLAUDE.md`.
 
 **After every round** each team gets: `results.json` (every team's average and finishes in
-every place), `my_bot_stats.json`, and `hand_history.jsonl.gz` (gzipped JSON lines, opponents
+every place), `my_bot_stats.json`, and `hand_history_subset.jsonl.gz` (25 tables) plus `hand_history_full.jsonl.gz` (every table; your team by default, setting "Full hand history") (gzipped JSON lines, opponents
 named). The page also has an ICM calculator and a **Local test** button (`check` + 5 `play`
 tables).
 

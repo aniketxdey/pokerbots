@@ -167,7 +167,7 @@ class RivalAgent:
             rd = ev["round"]
             tag = f"{rd['kind']}_{rd['n']}"
             news = (f"{rd['label']} results are in. Downloads are in downloads/{tag}/ (results.json, "
-                    f"my_bot_stats.json, hand_history.jsonl.gz - read it with hand-history/reader.py). "
+                    f"my_bot_stats.json, hand_history_subset.jsonl.gz and, if enabled, hand_history_full.jsonl.gz - read them with hand-history/reader.py). "
                     f"Use them to improve your bot.")
         nxt = g.next_event()
         clock = (f"Event time {_fmt_t(g.event_time())}. "

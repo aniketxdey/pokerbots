@@ -59,6 +59,7 @@ def new_game():
             "base_url": s.get("base_url") or C.DEFAULT_BASE_URL,
             "concurrency": max(1, min(10, int(s.get("concurrency", 3)))),
             "workers": int(s.get("workers", 0)),
+            "full_history": s.get("full_history") if s.get("full_history") in ("you", "all", "off") else "you",
             "build_minutes": max(1.0, float(s.get("build_minutes", 60))),
             "practice_every": max(0.5, float(s.get("practice_every", 10))),
             "scored_gap": max(0.5, float(s.get("scored_gap", 20))),

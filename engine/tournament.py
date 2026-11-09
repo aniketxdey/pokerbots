@@ -11,6 +11,7 @@ Mirrors the official "No Limit" rules (pokerbot.sequoiacap.com/rules.html):
   §3.6-3.9  no network, 1 ms per decision (auto check/fold), state reset per table,
             anonymized opponents
 """
+import gzip
 import json
 import multiprocessing as mp
 import os
@@ -61,6 +62,9 @@ class Config:
     sample_log_hands: int = 200      # hands of the first table to keep as a readable log
     history_bot: str = ""            # bot id / name / file whose hand histories are exported; "*" = every bot
     history_tables: int = 25         # max tables of hand history per round
+    history_full: list = field(default_factory=list)  # bot ids whose EVERY table is written to disk
+    history_dir: str = ""            # where full hand histories go (one folder per bot id)
+    round_label: str = ""            # written into full hand histories (e.g. "Scored round 3")
 
     @classmethod
     def from_dict(cls, d):
@@ -205,6 +209,8 @@ def _run_chunk(task):
         f1 = _focus_index(bots, cfg.history_bot)
         focus = set() if f1 is None else {f1}
     hcount = {}
+    full_ids = set(cfg.history_full or []) if cfg.history_dir else set()
+    full_files = {}
     for it in range(it_start, it_end):
         rng = random.Random(f"{seed}-{round_idx}-{it}")
         order = list(range(nb))
@@ -240,17 +246,33 @@ def _run_chunk(task):
                                cfg.time_mode, sl.stats, False)
             tl = [] if (want_log and log is None) else None
             rec = {}
+            full = {}
             for k, sl in enumerate(slots):
-                if sl.scoring and sl.idx in focus and sl.idx not in rec.values() \
-                        and hcount.get(sl.idx, 0) < hist_quota:
+                if not sl.scoring:
+                    continue
+                if sl.idx in focus and sl.idx not in rec.values() and hcount.get(sl.idx, 0) < hist_quota:
                     rec[k] = sl.idx
-            table = Table(slots, cfg, rng, log=tl, record_seat=list(rec) if rec else None)
+                if full_ids and bots[sl.idx]["id"] in full_ids and sl.idx not in full.values():
+                    full[k] = sl.idx
+            seats_rec = sorted(set(rec) | set(full))
+            table = Table(slots, cfg, rng, log=tl, record_seat=seats_rec if seats_rec else None)
             if tl is not None:
                 tl.append("Seats: " + ", ".join(f"S{i}={s.name}" for i, s in enumerate(slots)))
             res = table.play()
             tables_played += 1
             if tl is not None:
                 log = _trim_log(tl, cfg.sample_log_hands)
+            for k, bidx in full.items():
+                f = full_files.get(bidx)
+                if f is None:
+                    d = os.path.join(cfg.history_dir, bots[bidx]["id"])
+                    os.makedirs(d, exist_ok=True)
+                    f = full_files[bidx] = gzip.open(os.path.join(d, f"chunk_{it_start:07d}.jsonl.gz"), "wt")
+                meta = {"round": cfg.round_label or round_idx + 1, "table": it + 1, "my_place": res.places[k] or ts,
+                        "my_points": res.points[k]}
+                for h in table.records:
+                    if h["my_seat"] == k:
+                        f.write(json.dumps(dict(meta, **h)) + "\n")
             for k, bidx in rec.items():
                 hcount[bidx] = hcount.get(bidx, 0) + 1
                 hist.append({"round": round_idx + 1, "table": hcount[bidx], "iteration": it + 1,
@@ -283,6 +305,8 @@ def _run_chunk(task):
                 a["chips_end"] += res.final_stacks[seat]
     for a in agg:
         a["stats"] = a["stats"].to_dict()
+    for f in full_files.values():
+        f.close()
     return {"agg": agg, "log": log, "iterations": it_end - it_start, "tables": tables_played,
             "history": hist}
 
