@@ -528,8 +528,19 @@ def add_spend(usd):
 
 
 # ---------------------------------------------------------------------- starter kit
+class KitSpec:
+    """The settings a starter kit is written from (an event, or the setup form before one)."""
+    def __init__(self, variant="sf2026_reveal", points=(50, 30, 20, 0, 0, 0, 0, 0),
+                 practice_iterations=1000, scored_iterations=10000):
+        self.variant = variant
+        self.points = list(points)
+        self.practice_iterations = practice_iterations
+        self.scored_iterations = scored_iterations
+
+
 def write_starter_kit(ws, game):
     from engine.variants import get_variant
+    from engine.tournament import DEFAULT_BLINDS
     v = get_variant(game.variant)
     api_doc = open(os.path.join(ROOT, "engine", "api.py")).read()
     template = open(os.path.join(ROOT, "templates", "agent_template.py")).read()
@@ -576,9 +587,15 @@ Your bot answers `discard(obs)` (which card to throw away face down) and then `r
 - `hand_history.jsonl`: one JSON object per hand from your seat (your cards, discards,
   everyone's face-up cards, every action, board, showdowns, chip changes).
 
-## Local testing
-`local_test` (or `python -m sim.localtest bot.py` from the repository) plays your bot for a few
-tables against sample bots under the real time limit and reports crashes and timeouts.
+## Starter kit files
+- `bot.py` / `kit_example_bot.py`: the agent template. `api.py`: the full interface.
+- `payouts.json`: points for each finishing place at a table.
+- `blinds.json`: the blind schedule (levels, hands per level, starting stack, hand limit).
+- `icm.py`: the ICM calculator used to score tables that reach the hand limit
+  (`icm(stacks, payouts)` -> expected points; `place_probabilities(stacks)`).
+- Local simulator: `local_test` (or `python -m sim.localtest bot.py` from the repository) plays
+  your bot for a few tables against sample bots under the real time limit and reports places,
+  crashes, timeouts and decision times.
 """
     with open(os.path.join(ws, "RULES.md"), "w") as f:
         f.write(rules)
@@ -586,6 +603,17 @@ tables against sample bots under the real time limit and reports crashes and tim
         f.write(api_doc)
     with open(os.path.join(ws, "kit_example_bot.py"), "w") as f:
         f.write(template)
+    shutil.copy(os.path.join(ROOT, "sim", "kit", "icm.py"), os.path.join(ws, "icm.py"))
+    with open(os.path.join(ws, "payouts.json"), "w") as f:
+        json.dump({"points_by_place": [float(p) for p in game.points],
+                   "places": {str(k + 1): float(p) for k, p in enumerate(game.points)},
+                   "note": "Points for finishing 1st..8th at a table. If a table reaches the hand limit, the "
+                           "surviving bots split the remaining places by ICM (see icm.py)."}, f, indent=1)
+    with open(os.path.join(ws, "blinds.json"), "w") as f:
+        json.dump({"starting_stack": 2000, "hands_per_level": 25, "max_hands": 200,
+                   "levels": [{"level": k + 1, "hands": f"{25 * k + 1}-{25 * (k + 1)}", "small_blind": sb,
+                               "big_blind": bb} for k, (sb, bb) in enumerate(DEFAULT_BLINDS)],
+                   "note": "Blinds go up every 25 hands; the last level repeats if a table runs longer."}, f, indent=1)
     if not os.path.exists(os.path.join(ws, "bot.py")):
         with open(os.path.join(ws, "bot.py"), "w") as f:
             f.write(template)

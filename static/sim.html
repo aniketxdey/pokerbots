@@ -113,6 +113,7 @@
   </details>
   <div class="btns">
     <button class="primary" id="startBtn">Start event</button>
+    <button class="kitBtn">⬇ Download starter kit</button>
     <span class="hint">Starts the 60-minute build now. The AI rivals start working immediately.</span>
   </div>
 </section>
@@ -142,7 +143,7 @@
     <div class="btns">
       <button class="primary" id="submitBtn">Submit</button>
       <button id="testBtn">Local test (3 tables)</button>
-      <a href="/api/sim/kit">starter kit</a>
+      <button class="kitBtn">⬇ Starter kit</button>
     </div>
     <div id="submitMsg" class="hint" style="font-size:13px"></div>
     <table style="margin-top:8px"><thead><tr><th>#</th><th>Event time</th><th>Size</th><th>Status</th></tr></thead><tbody id="subs"></tbody></table>
@@ -177,6 +178,17 @@
 </section>
 </div>
 
+
+<!-- ======================= ICM calculator ======================= -->
+<section class="card" id="icmCard">
+  <h2>ICM calculator</h2>
+  <div class="hint" style="margin-bottom:6px">Expected points from chip stacks (the same model that scores tables at the 200-hand limit, and the same code as the kit's <code>icm.py</code>). Enter the surviving players' stacks; they compete for the top places.</div>
+  <div class="row">
+    <div style="grid-column:span 2"><label>Stacks (comma-separated)</label><input id="icmStacks" value="8000, 5000, 3000"></div>
+    <div><label>Points by place (1st, 2nd, …)</label><input id="icmPays" value="50, 30, 20"></div>
+  </div>
+  <div id="icmOut" style="margin-top:10px"></div>
+</section>
 <!-- ======================= rules ======================= -->
 <section class="card" id="rulesCard">
   <h2>Rules for this event</h2>
@@ -204,6 +216,7 @@ async function init() {
   priceHint(); $('model').oninput = priceHint;
   ['variant','points','practice_iterations','scored_iterations'].forEach(id => $(id).addEventListener('input', () => renderRules(null)));
   renderRules(null);
+  runIcm();
   setInterval(poll, 1000); poll();
 }
 function priceHint() {
@@ -282,6 +295,7 @@ async function poll() {
   $('resetBtn').classList.toggle('hidden', !s.id);
   creditAlert(s.id ? s : {agents: []});
   $('newCard').classList.toggle('hidden', !showForm);
+  D._live = !!(s.id && !s.finished);
   if (!s.id) { $('live').classList.add('hidden'); renderRules(null); return; }
   renderRules(showForm ? null : s);
   $('live').classList.remove('hidden');
@@ -392,6 +406,38 @@ function renderRules(s) {
     </div>
   </div>`;
 }
+
+
+function kitUrl() {
+  if (D && D._live) return '/api/sim/kit';
+  const q = new URLSearchParams({variant: $('variant').value,
+    points: $('points').value.split(/[ ,]+/).filter(Boolean).join(','),
+    practice_iterations: $('practice_iterations').value, scored_iterations: $('scored_iterations').value});
+  return '/api/sim/kit?' + q;
+}
+document.querySelectorAll('.kitBtn').forEach(b => b.onclick = () => { window.location = kitUrl(); });
+let icmTimer = null;
+async function runIcm() {
+  const nums = id => $(id).value.split(/[ ,]+/).filter(Boolean).map(Number);
+  const stacks = nums('icmStacks'), pays = nums('icmPays');
+  if (stacks.some(isNaN) || pays.some(isNaN)) { $('icmOut').innerHTML = '<span class="bad">Numbers only, separated by commas.</span>'; return; }
+  const r = await (await fetch('/api/sim/icm', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({stacks, payouts: pays})})).json();
+  if (!r.ok) { $('icmOut').innerHTML = `<span class="bad">${esc(r.problem)}</span>`; return; }
+  const tot = stacks.reduce((a, b) => a + b, 0), ord = n => ({1:'1st',2:'2nd',3:'3rd'})[n] || n + 'th';
+  const n = stacks.length;
+  let h = '<table><thead><tr><th>Player</th><th class="n">Chips</th><th class="n">Chip %</th>'
+    + [...Array(n).keys()].map(k => `<th class="n">P(${ord(k+1)})<div class="hint">${r.pay[k]} pts</div></th>`).join('')
+    + '<th class="n">ICM points</th><th class="n">ICM %</th></tr></thead><tbody>';
+  const totv = r.values.reduce((a, b) => a + b, 0);
+  stacks.forEach((st, i) => {
+    h += `<tr><td>${String.fromCharCode(65 + i)}</td><td class="n">${st.toLocaleString()}</td><td class="n">${(100*st/tot).toFixed(1)}%</td>`
+      + r.probs[i].map(p => `<td class="n">${(100*p).toFixed(1)}%</td>`).join('')
+      + `<td class="n"><b>${r.values[i].toFixed(2)}</b></td><td class="n">${totv ? (100*r.values[i]/totv).toFixed(1) : '0.0'}%</td></tr>`;
+  });
+  h += `</tbody></table><div class="hint">Total ${totv.toFixed(2)} points = the points for the top ${n} place${n > 1 ? 's' : ''}. Compare chip % with ICM %: big stacks are worth less than their chips, small stacks more.</div>`;
+  $('icmOut').innerHTML = h;
+}
+['icmStacks','icmPays'].forEach(id => $(id).addEventListener('input', () => { clearTimeout(icmTimer); icmTimer = setTimeout(runIcm, 250); }));
 
 async function openAgent(tid) {
   const a = await (await fetch('/api/sim/agent/' + tid)).json();

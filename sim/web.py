@@ -173,17 +173,45 @@ def download(rel):
 
 @bp.get("/api/sim/kit")
 def kit():
+    """Starter kit zip: from the running event, or from the setup form's settings
+    (?variant=&points=50,30,20&practice_iterations=&scored_iterations=)."""
+    import tempfile
+    from .game import KitSpec, write_starter_kit
     g = game()
-    if g is None:
-        abort(404)
-    ws = g.workspace(g.team(HUMAN_ID))
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for fn in ("RULES.md", "api.py", "kit_example_bot.py"):
-            z.write(os.path.join(ws, fn), fn)
-        z.write(os.path.join(ROOT, "sim", "localtest.py"), "localtest.py")
+    if g is not None and not request.args.get("variant"):
+        spec = g
+    else:
+        a = request.args
+        pts = [float(x) for x in (a.get("points") or "50,30,20,0,0,0,0,0").split(",") if x.strip()]
+        spec = KitSpec(a.get("variant") or "sf2026_reveal", (pts + [0.0] * 8)[:8],
+                       int(a.get("practice_iterations") or 1000), int(a.get("scored_iterations") or 10000))
+    with tempfile.TemporaryDirectory() as d:
+        write_starter_kit(d, spec)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for fn in ("RULES.md", "api.py", "kit_example_bot.py", "icm.py", "payouts.json", "blinds.json"):
+                z.write(os.path.join(d, fn), "starter_kit/" + fn)
+            z.write(os.path.join(ROOT, "sim", "localtest.py"), "starter_kit/local_simulator.py")
     buf.seek(0)
     return send_file(buf, as_attachment=True, download_name="starter_kit.zip", mimetype="application/zip")
+
+
+@bp.post("/api/sim/icm")
+def icm_calc():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("kit_icm", os.path.join(ROOT, "sim", "kit", "icm.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    b = request.get_json(force=True) or {}
+    try:
+        stacks = [float(x) for x in b.get("stacks", [])][:12]
+        pays = [float(x) for x in b.get("payouts", [])]
+        if not stacks or any(x < 0 for x in stacks) or sum(stacks) <= 0:
+            return jsonify({"ok": False, "problem": "enter at least one positive stack"})
+        return jsonify({"ok": True, "probs": m.place_probabilities(stacks), "values": m.icm(stacks, pays),
+                        "pay": (pays + [0.0] * len(stacks))[:len(stacks)]})
+    except (TypeError, ValueError) as e:
+        return jsonify({"ok": False, "problem": str(e)})
 
 
 @bp.get("/api/sim/agent/<tid>")
